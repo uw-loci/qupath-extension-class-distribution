@@ -5,6 +5,9 @@ import javafx.geometry.Pos;
 import javafx.scene.chart.PieChart;
 import javafx.scene.control.Label;
 import javafx.scene.control.Tooltip;
+import javafx.scene.effect.BlurType;
+import javafx.scene.effect.DropShadow;
+import javafx.scene.effect.Effect;
 import javafx.scene.layout.FlowPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
@@ -164,8 +167,13 @@ public final class ChartPane extends VBox {
             PieChart.Data slice = new PieChart.Data(labelText, summary.total());
             pieChart.getData().add(slice);
 
-            String style = "-fx-pie-color: " + colorForSlice(key, eval.highlight(), overColorHex, underColorHex) + ";";
+            // Slice fill is ALWAYS the PathClass colour. Highlight verdict
+            // is conveyed by a drop-shadow aura in the over/under colour --
+            // identifying standouts without obscuring the class identity.
+            String style = "-fx-pie-color: " + baseColorFor(key) + ";";
             applySliceStyle(slice, style);
+            applySliceEffect(slice, highlightEffectColor(eval.highlight(),
+                    overColorHex, underColorHex));
 
             String hover = formatHoverText(key, summary, pct);
             installSliceTooltip(slice, hover);
@@ -226,6 +234,43 @@ public final class ChartPane extends VBox {
         });
     }
 
+    /**
+     * Applies (or clears) a drop-shadow aura effect on a slice. The slice
+     * node is null until the chart lays out; install both an immediate set
+     * and a nodeProperty listener mirroring {@link #applySliceStyle}.
+     * Pass {@code null} to clear the effect on NORMAL slices.
+     */
+    private void applySliceEffect(PieChart.Data slice, Color highlightColor) {
+        Effect effect = highlightColor == null ? null
+                : new DropShadow(BlurType.GAUSSIAN, highlightColor, 18, 0.55, 0, 0);
+        if (slice.getNode() != null) {
+            slice.getNode().setEffect(effect);
+        }
+        slice.nodeProperty().addListener((obs, oldNode, newNode) -> {
+            if (newNode != null) {
+                newNode.setEffect(effect);
+            }
+        });
+    }
+
+    /**
+     * Returns the JavaFX {@link Color} for the highlight aura, or
+     * {@code null} when the slice is NORMAL (no aura).
+     */
+    private static Color highlightEffectColor(Highlight highlight,
+                                              String overColorHex,
+                                              String underColorHex) {
+        switch (highlight) {
+            case OVER:
+                return parseCssRgb(cssRgbFromHex(overColorHex, "rgb(0,188,212)"));
+            case UNDER:
+                return parseCssRgb(cssRgbFromHex(underColorHex, "rgb(229,57,53)"));
+            case NORMAL:
+            default:
+                return null;
+        }
+    }
+
     private void installSliceTooltip(PieChart.Data slice, String text) {
         Tooltip tip = new Tooltip(text);
         if (slice.getNode() != null) {
@@ -258,28 +303,9 @@ public final class ChartPane extends VBox {
     }
 
     /**
-     * Returns a CSS-ready {@code rgb(...)} string for one slice given the
-     * highlight verdict. OVER / UNDER take the user's chosen colours;
-     * NORMAL takes the QuPath {@link PathClass} colour, defaulting to grey
-     * for the Unclassified bucket.
-     */
-    private static String colorForSlice(ClassKey key, Highlight highlight,
-                                        String overColorHex, String underColorHex) {
-        switch (highlight) {
-            case OVER:
-                return cssRgbFromHex(overColorHex, "rgb(0,188,212)");
-            case UNDER:
-                return cssRgbFromHex(underColorHex, "rgb(229,57,53)");
-            case NORMAL:
-            default:
-                return baseColorFor(key);
-        }
-    }
-
-    /**
-     * Base (un-highlighted) colour for one slice. Drawn from the
-     * {@link PathClass} colour stored in QuPath; grey for the
-     * Unclassified bucket per the design.
+     * Base colour for one slice -- always the {@link PathClass} colour
+     * stored in QuPath, or grey for the Unclassified bucket. Highlight
+     * verdict is conveyed separately via {@link #applySliceEffect}.
      */
     private static String baseColorFor(ClassKey key) {
         if (key == null || key.isUnclassified()) {
@@ -324,18 +350,30 @@ public final class ChartPane extends VBox {
     }
 
     /**
-     * Builds one entry for the custom FlowPane legend: a coloured swatch +
-     * the class label + the percent. Tooltip on hover reuses the slice
-     * tooltip for parity with the chart.
+     * Builds one entry for the custom FlowPane legend: a coloured swatch
+     * (always the class colour) + the class label + the percent.
+     * Highlighted classes get a thick coloured stroke and matching glow on
+     * the swatch, plus a {@code [over]} / {@code [under]} text marker on
+     * the label so the verdict is screen-reader-readable.
      */
     private HBox buildLegendSwatch(ClassKey key, SliceEval eval, ClassSummary summary,
                                    double pct, String overColorHex, String underColorHex) {
         Rectangle swatch = new Rectangle(12, 12);
-        String css = colorForSlice(key, eval.highlight(), overColorHex, underColorHex);
-        swatch.setFill(parseCssRgb(css));
-        swatch.setStroke(Color.color(0.4, 0.4, 0.4, 0.6));
+        swatch.setFill(parseCssRgb(baseColorFor(key)));
 
-        Label text = new Label(String.format("%s %.1f%%", key.label(), pct));
+        Color highlightColor = highlightEffectColor(eval.highlight(), overColorHex, underColorHex);
+        String suffix;
+        if (highlightColor != null) {
+            swatch.setStroke(highlightColor);
+            swatch.setStrokeWidth(2.0);
+            swatch.setEffect(new DropShadow(BlurType.GAUSSIAN, highlightColor, 6, 0.6, 0, 0));
+            suffix = eval.highlight() == Highlight.OVER ? " [over]" : " [under]";
+        } else {
+            swatch.setStroke(Color.color(0.4, 0.4, 0.4, 0.6));
+            suffix = "";
+        }
+
+        Label text = new Label(String.format("%s %.1f%%%s", key.label(), pct, suffix));
         Tooltip.install(text, new Tooltip(formatHoverText(key, summary, pct)));
 
         HBox row = new HBox(4, swatch, text);
