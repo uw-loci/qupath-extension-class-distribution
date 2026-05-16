@@ -14,6 +14,7 @@ import javafx.scene.control.Button;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.ProgressIndicator;
+import javafx.scene.control.SplitPane;
 import javafx.scene.control.Tab;
 import javafx.scene.control.TabPane;
 import javafx.scene.control.Tooltip;
@@ -116,6 +117,10 @@ public final class ClassDistributionDialog {
     private final Label currentImageHeader = new Label("");
     private final Label currentImageStatus = new Label("");
     private final TabPane tabPane = new TabPane();
+    private final SplitPane sideBySidePane = new SplitPane();
+    private final BorderPane centreWrap = new BorderPane();
+    private VBox projectTabContent;
+    private VBox currentImageTabContent;
     private final AdvancedSection advanced;
     private final Label statusSummary = new Label("");
     private final Label statusLastPolled = new Label(resources.getString("status.lastPolledNever"));
@@ -186,17 +191,20 @@ public final class ClassDistributionDialog {
         header.getChildren().add(dirtyBanner);
         root.setTop(header);
 
-        // Centre: tabbed chart area. Each tab owns its own header controls
-        // and chart; the shared Advanced section + status bar live below.
+        // Centre: tabbed OR side-by-side chart area. Each pane owns its own
+        // header controls and chart; the shared Advanced section + status
+        // bar live below. The two content VBoxes are reused -- on toggle
+        // they are detached from one container and re-attached to the
+        // other (a JavaFX node can only have one parent).
         tabPane.setSide(javafx.geometry.Side.TOP);
         tabPane.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
+        sideBySidePane.setOrientation(javafx.geometry.Orientation.HORIZONTAL);
 
-        Tab projectTab = new Tab(resources.getString("tab.project"), buildProjectTabContent());
-        Tab currentImageTab = new Tab(resources.getString("tab.currentImage"), buildCurrentImageTabContent());
-        tabPane.getTabs().addAll(projectTab, currentImageTab);
-        BorderPane centreWrap = new BorderPane();
+        projectTabContent = buildProjectTabContent();
+        currentImageTabContent = buildCurrentImageTabContent();
+
         centreWrap.setPadding(new Insets(0, 12, 0, 12));
-        centreWrap.setCenter(tabPane);
+        applyDisplayMode(CDPreferences.isSideBySide());
         root.setCenter(centreWrap);
 
         VBox bottom = new VBox(8);
@@ -401,6 +409,33 @@ public final class ClassDistributionDialog {
         advanced.onRatioChanged(r -> renderChart());
         advanced.onColorsChanged(colors -> renderChart());
         advanced.onShowLabelsChanged(v -> renderChart());
+        advanced.onSideBySideChanged(this::applyDisplayMode);
+    }
+
+    /**
+     * Swaps the centre between a {@link TabPane} (tabs) and a {@link SplitPane}
+     * (horizontal split). The two content VBoxes are reused; only their
+     * parent container changes. Re-renders both panes afterwards so any
+     * placeholder text is up to date.
+     */
+    private void applyDisplayMode(boolean sideBySide) {
+        // Detach from whichever container currently holds the content.
+        tabPane.getTabs().clear();
+        sideBySidePane.getItems().clear();
+
+        if (sideBySide) {
+            sideBySidePane.getItems().setAll(projectTabContent, currentImageTabContent);
+            sideBySidePane.setDividerPositions(0.5);
+            centreWrap.setCenter(sideBySidePane);
+        } else {
+            Tab projectTab = new Tab(resources.getString("tab.project"), projectTabContent);
+            Tab currentImageTab = new Tab(resources.getString("tab.currentImage"), currentImageTabContent);
+            projectTab.setClosable(false);
+            currentImageTab.setClosable(false);
+            tabPane.getTabs().setAll(projectTab, currentImageTab);
+            centreWrap.setCenter(tabPane);
+        }
+        renderChart();
     }
 
     private void rebindHierarchy(ImageData<BufferedImage> imageData) {
@@ -686,6 +721,17 @@ public final class ClassDistributionDialog {
         if (contribs.isEmpty() || sumContribution(contribs) <= 0.0) {
             currentImageChartPane.showPlaceholder(resources.getString("empty.noAnnotationsCurrent"));
             return;
+        }
+
+        // Add a zero-contribution placeholder for every project class the
+        // open image has none of. HighlightEvaluator detects the (0, 0)
+        // pair and flags them Highlight.MISSING; ChartPane renders them
+        // legend-only with the yellow MISSING marker.
+        var projectSummary = cache.summarize(null);
+        for (var projKey : projectSummary.contributions().keySet()) {
+            if (!contribs.containsKey(projKey)) {
+                contribs.put(projKey, new ContributionCalculator.ClassSummary(0.0, 0));
+            }
         }
         var evaluation = HighlightEvaluator.evaluate(contribs, advanced.getHighlightRatio());
         currentImageChartPane.refresh(contribs, evaluation,

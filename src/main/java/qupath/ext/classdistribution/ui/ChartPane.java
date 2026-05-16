@@ -145,14 +145,20 @@ public final class ChartPane extends VBox {
 
         hidePlaceholder();
 
-        // Apply slice-label suppression policy.
-        boolean labelsOn = showLabelsPref && contributions.size() <= SLICE_LABEL_SUPPRESS_THRESHOLD;
-        pieChart.setLabelsVisible(labelsOn);
-
         // Build slice list in insertion order so the chart and legend agree.
+        // Sort largest first (cosmetic); MISSING entries (zero contribution)
+        // naturally sink to the end.
         List<Map.Entry<ClassKey, ClassSummary>> ordered = new java.util.ArrayList<>(contributions.entrySet());
-        // Stable sort: largest slice first (cosmetic; keeps the chart tidy).
         ordered.sort((a, b) -> Double.compare(b.getValue().total(), a.getValue().total()));
+
+        // Slice-label suppression counts only entries that actually appear in
+        // the pie -- MISSING classes are legend-only and shouldn't trip the
+        // 10-slice threshold.
+        long presentCount = ordered.stream()
+                .filter(e -> e.getValue().total() > 0.0)
+                .count();
+        boolean labelsOn = showLabelsPref && presentCount <= SLICE_LABEL_SUPPRESS_THRESHOLD;
+        pieChart.setLabelsVisible(labelsOn);
 
         for (Map.Entry<ClassKey, ClassSummary> e : ordered) {
             ClassKey key = e.getKey();
@@ -162,23 +168,30 @@ public final class ChartPane extends VBox {
                 eval = new SliceEval(0.0, 0.0, Highlight.NORMAL);
             }
             double pct = eval.share() * 100.0;
+            boolean isMissing = eval.highlight() == Highlight.MISSING;
 
-            String labelText = String.format("%s (%.1f%%)", key.label(), pct);
-            PieChart.Data slice = new PieChart.Data(labelText, summary.total());
-            pieChart.getData().add(slice);
+            // MISSING entries are LEGEND-ONLY -- they have zero size and
+            // would either render nothing or distort the pie if injected.
+            if (!isMissing) {
+                String labelText = String.format("%s (%.1f%%)", key.label(), pct);
+                PieChart.Data slice = new PieChart.Data(labelText, summary.total());
+                pieChart.getData().add(slice);
 
-            // Slice fill is ALWAYS the PathClass colour. Highlight verdict
-            // is conveyed by a drop-shadow aura in the over/under colour --
-            // identifying standouts without obscuring the class identity.
-            String style = "-fx-pie-color: " + baseColorFor(key) + ";";
-            applySliceStyle(slice, style);
-            applySliceEffect(slice, highlightEffectColor(eval.highlight(),
-                    overColorHex, underColorHex));
+                // Slice fill is ALWAYS the PathClass colour. Highlight
+                // verdict is conveyed by a drop-shadow aura in the
+                // over/under colour -- identifying standouts without
+                // obscuring the class identity.
+                String style = "-fx-pie-color: " + baseColorFor(key) + ";";
+                applySliceStyle(slice, style);
+                applySliceEffect(slice, highlightEffectColor(eval.highlight(),
+                        overColorHex, underColorHex));
 
-            String hover = formatHoverText(key, summary, pct);
-            installSliceTooltip(slice, hover);
+                String hover = formatHoverText(key, summary, pct);
+                installSliceTooltip(slice, hover);
+            }
 
-            // Add a swatch + label to the custom legend.
+            // Add a swatch + label to the custom legend for every entry,
+            // including MISSING.
             legend.getChildren().add(buildLegendSwatch(key, eval, summary, pct,
                     overColorHex, underColorHex));
         }
@@ -255,7 +268,8 @@ public final class ChartPane extends VBox {
 
     /**
      * Returns the JavaFX {@link Color} for the highlight aura, or
-     * {@code null} when the slice is NORMAL (no aura).
+     * {@code null} when the slice is NORMAL (no aura). MISSING uses a
+     * fixed yellow regardless of the user's over / under colour choices.
      */
     private static Color highlightEffectColor(Highlight highlight,
                                               String overColorHex,
@@ -265,11 +279,16 @@ public final class ChartPane extends VBox {
                 return parseCssRgb(cssRgbFromHex(overColorHex, "rgb(0,188,212)"));
             case UNDER:
                 return parseCssRgb(cssRgbFromHex(underColorHex, "rgb(229,57,53)"));
+            case MISSING:
+                return MISSING_COLOR;
             case NORMAL:
             default:
                 return null;
         }
     }
+
+    /** Fixed yellow used for MISSING swatches (Material amber 600). */
+    private static final Color MISSING_COLOR = Color.web("#FFB300");
 
     private void installSliceTooltip(PieChart.Data slice, String text) {
         Tooltip tip = new Tooltip(text);
@@ -381,7 +400,12 @@ public final class ChartPane extends VBox {
             swatch.setStroke(highlightColor);
             swatch.setStrokeWidth(2.0);
             swatch.setEffect(new DropShadow(BlurType.GAUSSIAN, highlightColor, 6, 0.6, 0, 0));
-            suffix = eval.highlight() == Highlight.OVER ? " [over]" : " [under]";
+            switch (eval.highlight()) {
+                case OVER:    suffix = " [over]"; break;
+                case UNDER:   suffix = " [under]"; break;
+                case MISSING: suffix = " [missing]"; break;
+                default:      suffix = ""; break;
+            }
         } else {
             swatch.setStroke(Color.color(0.4, 0.4, 0.4, 0.6));
             suffix = "";

@@ -41,6 +41,7 @@ public final class CDPreferences {
     private static final int DEFAULT_POLYLINE_WIDTH_PX = 1;
     private static final double DEFAULT_HIGHLIGHT_RATIO = 2.0;
     private static final boolean DEFAULT_SHOW_SLICE_LABELS = true;
+    private static final boolean DEFAULT_SIDE_BY_SIDE = false;
     private static final String DEFAULT_LAST_IMAGE_TYPE_FILTER = "";
     private static final String DEFAULT_OVER_COLOR_HEX = "#0072B2";
     private static final String DEFAULT_UNDER_COLOR_HEX = "#D55E00";
@@ -58,6 +59,7 @@ public final class CDPreferences {
     private static StringProperty overColorHexProperty;
     private static StringProperty underColorHexProperty;
     private static BooleanProperty advancedSectionExpandedProperty;
+    private static BooleanProperty sideBySideProperty;
     private static DoubleProperty dialogXProperty;
     private static DoubleProperty dialogYProperty;
     private static DoubleProperty dialogWidthProperty;
@@ -96,6 +98,8 @@ public final class CDPreferences {
                 PREFIX + "underColorHex", DEFAULT_UNDER_COLOR_HEX);
         advancedSectionExpandedProperty = PathPrefs.createPersistentPreference(
                 PREFIX + "advancedSectionExpanded", DEFAULT_ADVANCED_SECTION_EXPANDED);
+        sideBySideProperty = PathPrefs.createPersistentPreference(
+                PREFIX + "sideBySide", DEFAULT_SIDE_BY_SIDE);
         dialogXProperty = PathPrefs.createPersistentPreference(
                 PREFIX + "dialogX", DEFAULT_DIALOG_X);
         dialogYProperty = PathPrefs.createPersistentPreference(
@@ -138,6 +142,10 @@ public final class CDPreferences {
 
     public static BooleanProperty advancedSectionExpandedProperty() {
         return advancedSectionExpandedProperty;
+    }
+
+    public static BooleanProperty sideBySideProperty() {
+        return sideBySideProperty;
     }
 
     public static DoubleProperty dialogXProperty() {
@@ -234,6 +242,17 @@ public final class CDPreferences {
     public static void setAdvancedSectionExpanded(boolean v) {
         if (advancedSectionExpandedProperty != null) {
             advancedSectionExpandedProperty.set(v);
+        }
+    }
+
+    public static boolean isSideBySide() {
+        return sideBySideProperty != null
+                ? sideBySideProperty.get() : DEFAULT_SIDE_BY_SIDE;
+    }
+
+    public static void setSideBySide(boolean v) {
+        if (sideBySideProperty != null) {
+            sideBySideProperty.set(v);
         }
     }
 

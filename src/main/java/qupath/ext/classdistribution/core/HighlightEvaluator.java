@@ -52,12 +52,16 @@ public final class HighlightEvaluator {
     }
 
     /**
-     * Highlight verdict for one slice.
+     * Highlight verdict for one slice. {@link #MISSING} flags a class that
+     * was passed in with zero contribution AND zero annotation count --
+     * conventionally injected by the Current Image view to surface
+     * project classes that the open image has none of.
      */
     public enum Highlight {
         OVER,
         UNDER,
-        NORMAL
+        NORMAL,
+        MISSING
     }
 
     /**
@@ -131,9 +135,16 @@ public final class HighlightEvaluator {
             contributions = Collections.emptyMap();
         }
         double k = Math.max(1.0, ratio);
+
+        // Entries with zero contribution AND zero count are conventionally
+        // "missing" -- a project class the current image has none of. They
+        // must NOT influence the median (otherwise injecting missing
+        // entries would skew the comparison group), but must round-trip
+        // into the output map with Highlight.MISSING.
         double total = 0.0;
-        for (ClassSummary s : contributions.values()) {
-            if (s != null) {
+        for (Map.Entry<ClassKey, ClassSummary> e : contributions.entrySet()) {
+            ClassSummary s = e.getValue();
+            if (s != null && !isMissing(s)) {
                 total += s.total();
             }
         }
@@ -141,33 +152,46 @@ public final class HighlightEvaluator {
         Map<ClassKey, SliceEval> out = new LinkedHashMap<>();
 
         if (total <= 0.0 || contributions.isEmpty()) {
-            for (ClassKey c : contributions.keySet()) {
-                out.put(c, new SliceEval(0.0, 0.0, Highlight.NORMAL));
+            for (Map.Entry<ClassKey, ClassSummary> e : contributions.entrySet()) {
+                Highlight h = (e.getValue() != null && isMissing(e.getValue()))
+                        ? Highlight.MISSING : Highlight.NORMAL;
+                out.put(e.getKey(), new SliceEval(0.0, 0.0, h));
             }
             return new Evaluation(out, total);
         }
 
-        // Pre-compute shares (fraction of total, in [0, 1]).
+        // Pre-compute shares (fraction of total, in [0, 1]) for non-missing
+        // entries, and remember which keys are missing.
         Map<ClassKey, Double> shares = new LinkedHashMap<>();
-        java.util.List<Double> allShares = new java.util.ArrayList<>(contributions.size());
+        java.util.List<Double> presentShares = new java.util.ArrayList<>(contributions.size());
+        java.util.Set<ClassKey> missingKeys = new java.util.LinkedHashSet<>();
         for (Map.Entry<ClassKey, ClassSummary> e : contributions.entrySet()) {
-            double v = e.getValue() == null ? 0.0 : e.getValue().total();
+            ClassSummary s = e.getValue();
+            if (s != null && isMissing(s)) {
+                missingKeys.add(e.getKey());
+                shares.put(e.getKey(), 0.0);
+                continue;
+            }
+            double v = s == null ? 0.0 : s.total();
             double share = v / total;
             shares.put(e.getKey(), share);
-            allShares.add(share);
+            presentShares.add(share);
         }
 
-        double globalMedian = median(allShares);
-        boolean canCompare = shares.size() >= 2;
+        double globalMedian = median(presentShares);
+        boolean canCompare = presentShares.size() >= 2;
 
         for (Map.Entry<ClassKey, Double> e : shares.entrySet()) {
+            ClassKey key = e.getKey();
             double share = e.getValue();
             Highlight h;
-            if (!canCompare) {
+            if (missingKeys.contains(key)) {
+                h = Highlight.MISSING;
+            } else if (!canCompare) {
                 h = Highlight.NORMAL;
             } else if (globalMedian <= 0.0) {
-                // Degenerate: more than half the classes are empty. Any
-                // positive share is OVER; nothing can be UNDER.
+                // Degenerate: more than half the present classes are empty.
+                // Any positive share is OVER; nothing can be UNDER.
                 h = share > 0.0 ? Highlight.OVER : Highlight.NORMAL;
             } else {
                 double r = share / globalMedian;
@@ -179,9 +203,14 @@ public final class HighlightEvaluator {
                     h = Highlight.NORMAL;
                 }
             }
-            out.put(e.getKey(), new SliceEval(share, globalMedian, h));
+            out.put(key, new SliceEval(share, globalMedian, h));
         }
         return new Evaluation(out, total);
+    }
+
+    /** A class with neither annotations nor area -- treated as missing. */
+    private static boolean isMissing(ClassSummary s) {
+        return s.count() == 0 && s.total() == 0.0;
     }
 
     /**

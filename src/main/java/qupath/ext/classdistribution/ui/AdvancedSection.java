@@ -51,6 +51,7 @@ public final class AdvancedSection extends TitledPane {
     private final ColorPicker overPicker;
     private final ColorPicker underPicker;
     private final CheckBox showLabelsCheck;
+    private final CheckBox sideBySideCheck;
 
     /**
      * Builds the section. The supplied {@code resources} bundle must
@@ -101,6 +102,13 @@ public final class AdvancedSection extends TitledPane {
         Label showLabelsHint = new Label("(" + resources.getString("label.showSliceLabelsHint") + ")");
         showLabelsHint.setStyle("-fx-text-fill: -fx-text-base-color; -fx-opacity: 0.7; -fx-font-size: 0.9em;");
 
+        // Side-by-side toggle: swaps the dialog's tabbed display for a
+        // horizontal split. Useful on wide screens; the user will need to
+        // resize the dialog to fit both charts comfortably.
+        sideBySideCheck = new CheckBox(resources.getString("label.sideBySide"));
+        sideBySideCheck.setSelected(CDPreferences.isSideBySide());
+        sideBySideCheck.setTooltip(new Tooltip(resources.getString("tooltip.sideBySide")));
+
         // Layout
         GridPane grid = new GridPane();
         grid.setHgap(8);
@@ -135,10 +143,14 @@ public final class AdvancedSection extends TitledPane {
         colorRow.setAlignment(Pos.CENTER_LEFT);
         grid.add(colorRow, 0, 2, 4, 1);
 
-        // Row 3: show-labels checkbox
+        // Row 3: show-labels checkbox + side-by-side checkbox
         HBox labelsRow = new HBox(6, showLabelsCheck, showLabelsHint);
         labelsRow.setAlignment(Pos.CENTER_LEFT);
         grid.add(labelsRow, 0, 3, 4, 1);
+
+        HBox sideBySideRow = new HBox(6, sideBySideCheck);
+        sideBySideRow.setAlignment(Pos.CENTER_LEFT);
+        grid.add(sideBySideRow, 0, 4, 4, 1);
 
         setContent(grid);
 
@@ -168,6 +180,11 @@ public final class AdvancedSection extends TitledPane {
         showLabelsCheck.selectedProperty().addListener((obs, oldV, newV) -> {
             if (newV != null) {
                 CDPreferences.setShowSliceLabels(newV);
+            }
+        });
+        sideBySideCheck.selectedProperty().addListener((obs, oldV, newV) -> {
+            if (newV != null) {
+                CDPreferences.setSideBySide(newV);
             }
         });
         expandedProperty().addListener((obs, oldV, newV) -> {
@@ -226,6 +243,21 @@ public final class AdvancedSection extends TitledPane {
                 listener.accept(newV);
             }
         });
+    }
+
+    /**
+     * Adds a listener that fires whenever the side-by-side checkbox toggles.
+     */
+    public void onSideBySideChanged(Consumer<Boolean> listener) {
+        sideBySideCheck.selectedProperty().addListener((obs, oldV, newV) -> {
+            if (newV != null) {
+                listener.accept(newV);
+            }
+        });
+    }
+
+    public boolean isSideBySide() {
+        return sideBySideCheck.isSelected();
     }
 
     public int getPolylineWidthPx() {
