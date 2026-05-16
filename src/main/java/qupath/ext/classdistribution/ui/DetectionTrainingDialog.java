@@ -127,8 +127,10 @@ public final class DetectionTrainingDialog {
         this.dirtyBanner = new DirtyBanner(qupath, resources);
         this.chartPane = new ChartPane(resources);
         this.currentImageChartPane = new ChartPane(resources);
-        // Hide polyline-width control -- not a labeling mechanism for detections.
-        this.advanced = new AdvancedSection(resources, false);
+        // Hide polyline-width control (not a labeling mechanism for
+        // detections), show split-multi-part checkbox (relevant to
+        // detection labeling, matching QuPath's Distance-to-annotations 2D).
+        this.advanced = new AdvancedSection(resources, false, true);
         configureStage();
     }
 
@@ -366,6 +368,8 @@ public final class DetectionTrainingDialog {
         advanced.onColorsChanged(colors -> renderChart());
         advanced.onShowLabelsChanged(v -> renderChart());
         advanced.onSideBySideChanged(this::applyDisplayMode);
+        // Split toggle is a pure post-aggregation re-key -- no re-poll needed.
+        advanced.onSplitMultiPartChanged(v -> renderChart());
     }
 
     private void applyDisplayMode(boolean sideBySide) {
@@ -592,7 +596,9 @@ public final class DetectionTrainingDialog {
                     resources.getString("status.detectionsSummaryFormat"), 0, 0, 0));
             return;
         }
-        if (summary.contributions().isEmpty() || sumContribution(summary.contributions()) <= 0.0) {
+        var projectContribs = DetectionLabelCalculator.applySplit(
+                summary.contributions(), advanced.isSplitMultiPart());
+        if (projectContribs.isEmpty() || sumContribution(projectContribs) <= 0.0) {
             chartPane.showPlaceholder(resources.getString("empty.noDetectionLabels"));
             statusSummary.setText(String.format(
                     resources.getString("status.detectionsSummaryFormat"),
@@ -601,9 +607,9 @@ public final class DetectionTrainingDialog {
                     summary.imageCount()));
             return;
         }
-        var evaluation = HighlightEvaluator.evaluate(summary.contributions(),
+        var evaluation = HighlightEvaluator.evaluate(projectContribs,
                 advanced.getHighlightRatio());
-        chartPane.refresh(summary.contributions(), evaluation,
+        chartPane.refresh(projectContribs, evaluation,
                 advanced.isShowSliceLabels(),
                 advanced.getOverColorHex(),
                 advanced.getUnderColorHex());
@@ -638,17 +644,22 @@ public final class DetectionTrainingDialog {
                 result.distinctLabeledDetections(),
                 result.trainingAnnotationCount()));
 
-        var contribs = new java.util.LinkedHashMap<>(result.perClass());
+        boolean split = advanced.isSplitMultiPart();
+        var contribs = new java.util.LinkedHashMap<>(
+                DetectionLabelCalculator.applySplit(result.perClass(), split));
         if (contribs.isEmpty() || sumContribution(contribs) <= 0.0) {
             currentImageChartPane.showPlaceholder(resources.getString("empty.noDetectionLabelsCurrent"));
             return;
         }
 
         // Inject MISSING placeholders for project classes the open image has
-        // no labeled detections of. HighlightEvaluator picks them up via
-        // their zero (count, total) and ChartPane renders them legend-only.
+        // no labeled detections of. The project class set must also reflect
+        // the split toggle so e.g. "CD4: CD8" expands to CD4 + CD8 when
+        // split is on, matching what the project chart shows.
         var projectSummary = cache.summarize(null);
-        for (var projKey : projectSummary.contributions().keySet()) {
+        var projectKeys = DetectionLabelCalculator.applySplit(
+                projectSummary.contributions(), split).keySet();
+        for (var projKey : projectKeys) {
             if (!contribs.containsKey(projKey)) {
                 contribs.put(projKey,
                         new ContributionCalculator.ClassSummary(0.0, 0));

@@ -52,23 +52,25 @@ public final class AdvancedSection extends TitledPane {
     private final ColorPicker underPicker;
     private final CheckBox showLabelsCheck;
     private final CheckBox sideBySideCheck;
+    private final CheckBox splitMultiPartCheck;
 
     /**
-     * Builds the section with all controls visible. The supplied
-     * {@code resources} bundle must contain every key from
-     * {@code strings.properties} that the section uses (see source for the
-     * exact list).
+     * Builds the section with the annotation-distribution control set:
+     * polyline-width shown, split-multi-part hidden.
      */
     public AdvancedSection(ResourceBundle resources) {
-        this(resources, true);
+        this(resources, true, false);
     }
 
     /**
-     * Builds the section. When {@code showPolylineWidth} is false the
-     * polyline-width row is omitted -- useful for the detection-training
-     * dialog where polyline ROIs are not a labeling mechanism.
+     * Builds the section. {@code showPolylineWidth} omits the polyline-width
+     * row when false (the detection-training dialog uses this).
+     * {@code showSplitMultiPart} shows the "Split multi-part classifications"
+     * checkbox -- only meaningful for detection labeling, which is what the
+     * QuPath Object Classifier and "Distance to annotations 2D" do.
      */
-    public AdvancedSection(ResourceBundle resources, boolean showPolylineWidth) {
+    public AdvancedSection(ResourceBundle resources, boolean showPolylineWidth,
+                           boolean showSplitMultiPart) {
         super(resources.getString("section.advanced"), null);
         setCollapsible(true);
         setExpanded(CDPreferences.isAdvancedSectionExpanded());
@@ -119,6 +121,14 @@ public final class AdvancedSection extends TitledPane {
         sideBySideCheck.setSelected(CDPreferences.isSideBySide());
         sideBySideCheck.setTooltip(new Tooltip(resources.getString("tooltip.sideBySide")));
 
+        // Split-multi-part toggle: when enabled, a class like "CD4: CD8"
+        // contributes counts to CD4 AND CD8 independently. Mirrors the
+        // QuPath "Distance to annotations 2D" command's flag and uses the
+        // same PathClassTools.splitNames logic underneath.
+        splitMultiPartCheck = new CheckBox(resources.getString("label.splitMultiPart"));
+        splitMultiPartCheck.setSelected(CDPreferences.isSplitMultiPart());
+        splitMultiPartCheck.setTooltip(new Tooltip(resources.getString("tooltip.splitMultiPart")));
+
         // Layout
         GridPane grid = new GridPane();
         grid.setHgap(8);
@@ -164,6 +174,12 @@ public final class AdvancedSection extends TitledPane {
         sideBySideRow.setAlignment(Pos.CENTER_LEFT);
         grid.add(sideBySideRow, 0, 4, 4, 1);
 
+        if (showSplitMultiPart) {
+            HBox splitRow = new HBox(6, splitMultiPartCheck);
+            splitRow.setAlignment(Pos.CENTER_LEFT);
+            grid.add(splitRow, 0, 5, 4, 1);
+        }
+
         setContent(grid);
 
         // Persistence: write through to CDPreferences on every change.
@@ -197,6 +213,11 @@ public final class AdvancedSection extends TitledPane {
         sideBySideCheck.selectedProperty().addListener((obs, oldV, newV) -> {
             if (newV != null) {
                 CDPreferences.setSideBySide(newV);
+            }
+        });
+        splitMultiPartCheck.selectedProperty().addListener((obs, oldV, newV) -> {
+            if (newV != null) {
+                CDPreferences.setSplitMultiPart(newV);
             }
         });
         expandedProperty().addListener((obs, oldV, newV) -> {
@@ -270,6 +291,21 @@ public final class AdvancedSection extends TitledPane {
 
     public boolean isSideBySide() {
         return sideBySideCheck.isSelected();
+    }
+
+    /**
+     * Adds a listener that fires whenever the split-multi-part checkbox toggles.
+     */
+    public void onSplitMultiPartChanged(Consumer<Boolean> listener) {
+        splitMultiPartCheck.selectedProperty().addListener((obs, oldV, newV) -> {
+            if (newV != null) {
+                listener.accept(newV);
+            }
+        });
+    }
+
+    public boolean isSplitMultiPart() {
+        return splitMultiPartCheck.isSelected();
     }
 
     public int getPolylineWidthPx() {

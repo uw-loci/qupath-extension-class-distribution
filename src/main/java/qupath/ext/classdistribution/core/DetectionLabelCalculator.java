@@ -5,12 +5,15 @@ import qupath.ext.classdistribution.core.ContributionCalculator.ClassSummary;
 import qupath.lib.geom.Point2;
 import qupath.lib.objects.PathObject;
 import qupath.lib.objects.PathObjectTools;
+import qupath.lib.objects.classes.PathClass;
+import qupath.lib.objects.classes.PathClassTools;
 import qupath.lib.objects.hierarchy.PathObjectHierarchy;
 import qupath.lib.roi.interfaces.ROI;
 
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -165,5 +168,61 @@ public final class DetectionLabelCalculator {
             out.put(e.getKey(), new ClassSummary((double) n, n));
         }
         return new Result(out, distinct.size(), trainingAnnotationCount);
+    }
+
+    /**
+     * Optionally re-keys {@code raw} so multi-part classifications such as
+     * {@code "CD4: CD8"} contribute their count to each base name
+     * separately ({@code CD4} and {@code CD8}). When {@code splitMultiPart}
+     * is false, returns the input unchanged.
+     *
+     * <p>Uses QuPath's own
+     * {@link PathClassTools#splitNames(PathClass)} for the split and
+     * {@link PathClass#fromString(String)} to look up the canonical
+     * single-name {@link PathClass} -- so user-set colors on
+     * {@code CD4} and {@code CD8} are picked up automatically.
+     *
+     * <p>A detection labeled as {@code CD4: CD8} is counted once for
+     * {@code CD4} AND once for {@code CD8}; the sum of counts can exceed
+     * the number of distinct labeled detections, matching how
+     * {@code DistanceTools} treats the same flag.
+     */
+    public static Map<ClassKey, ClassSummary> applySplit(
+            Map<ClassKey, ClassSummary> raw, boolean splitMultiPart) {
+        if (raw == null || raw.isEmpty() || !splitMultiPart) {
+            return raw == null ? new LinkedHashMap<>() : new LinkedHashMap<>(raw);
+        }
+        Map<ClassKey, ClassSummary> out = new LinkedHashMap<>();
+        for (Map.Entry<ClassKey, ClassSummary> e : raw.entrySet()) {
+            ClassKey key = e.getKey();
+            ClassSummary summary = e.getValue();
+            if (summary == null) {
+                continue;
+            }
+            PathClass pc = key.pathClass();
+            List<String> names = PathClassTools.splitNames(pc);
+            if (names.size() <= 1) {
+                // Single-name (or unclassified) -- carry through unchanged,
+                // adding to whatever may already exist under that key.
+                mergeInto(out, key, summary);
+                continue;
+            }
+            for (String name : names) {
+                PathClass canonical = PathClass.fromString(name);
+                ClassKey partKey = ContributionCalculator.keyFor(canonical);
+                mergeInto(out, partKey, summary);
+            }
+        }
+        return out;
+    }
+
+    private static void mergeInto(Map<ClassKey, ClassSummary> map,
+                                  ClassKey key, ClassSummary toAdd) {
+        ClassSummary existing = map.get(key);
+        if (existing == null) {
+            map.put(key, new ClassSummary(toAdd.total(), toAdd.count()));
+        } else {
+            existing.add(toAdd.total(), toAdd.count());
+        }
     }
 }
