@@ -1,6 +1,8 @@
 package qupath.ext.classdistribution.ui;
 
 import javafx.application.Platform;
+import javafx.beans.property.BooleanProperty;
+import javafx.beans.property.SimpleBooleanProperty;
 import javafx.beans.value.ChangeListener;
 import javafx.collections.FXCollections;
 import javafx.concurrent.Task;
@@ -118,7 +120,7 @@ public final class ClassDistributionDialog {
     private ChangeListener<ImageData<BufferedImage>> imageDataListener;
     private ChangeListener<Project<BufferedImage>> projectListener;
 
-    private boolean pollInProgress;
+    private final BooleanProperty pollInProgress = new SimpleBooleanProperty(false);
     /** The currently-running refresh task (for cancellation). Null when idle. */
     private Task<Void> currentTask;
 
@@ -247,7 +249,7 @@ public final class ClassDistributionDialog {
 
         repollButton.setTooltip(new Tooltip(resources.getString("tooltip.repoll")));
         repollButton.setOnAction(e -> startProjectPoll());
-        repollButton.disableProperty().bind(qupath.projectProperty().isNull());
+        repollButton.disableProperty().bind(qupath.projectProperty().isNull().or(pollInProgress));
 
         // Cancel button: visible only while a refresh task is running.
         cancelButton.setTooltip(new Tooltip(resources.getString("tooltip.repollCancel")));
@@ -446,15 +448,14 @@ public final class ClassDistributionDialog {
     }
 
     private void startProjectPoll() {
-        if (pollInProgress) {
+        if (pollInProgress.get()) {
             return;
         }
         Project<BufferedImage> project = qupath.getProject();
         if (project == null) {
             return;
         }
-        pollInProgress = true;
-        repollButton.setDisable(true);
+        pollInProgress.set(true);
         cancelButton.setVisible(true);
         cancelButton.setManaged(true);
         pollProgress.setVisible(true);
@@ -530,9 +531,8 @@ public final class ClassDistributionDialog {
     }
 
     private void finishPoll(boolean ok) {
-        pollInProgress = false;
+        pollInProgress.set(false);
         currentTask = null;
-        repollButton.setDisable(false);
         repollButton.setText(resources.getString("label.repollProject"));
         cancelButton.setVisible(false);
         cancelButton.setManaged(false);
