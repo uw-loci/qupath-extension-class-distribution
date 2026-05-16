@@ -14,6 +14,8 @@ import javafx.scene.control.Button;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.ProgressIndicator;
+import javafx.scene.control.Tab;
+import javafx.scene.control.TabPane;
 import javafx.scene.control.Tooltip;
 import javafx.scene.input.KeyCode;
 import javafx.scene.input.KeyEvent;
@@ -110,6 +112,10 @@ public final class ClassDistributionDialog {
     private final ProgressIndicator pollProgress = new ProgressIndicator();
     private final DirtyBanner dirtyBanner;
     private final ChartPane chartPane;
+    private final ChartPane currentImageChartPane;
+    private final Label currentImageHeader = new Label("");
+    private final Label currentImageStatus = new Label("");
+    private final TabPane tabPane = new TabPane();
     private final AdvancedSection advanced;
     private final Label statusSummary = new Label("");
     private final Label statusLastPolled = new Label(resources.getString("status.lastPolledNever"));
@@ -129,6 +135,7 @@ public final class ClassDistributionDialog {
         this.stage = new Stage();
         this.dirtyBanner = new DirtyBanner(qupath, resources);
         this.chartPane = new ChartPane(resources);
+        this.currentImageChartPane = new ChartPane(resources);
         this.advanced = new AdvancedSection(resources);
         configureStage();
     }
@@ -176,23 +183,21 @@ public final class ClassDistributionDialog {
 
         VBox header = new VBox(8);
         header.setPadding(new Insets(10, 12, 0, 12));
-        header.getChildren().addAll(dirtyBanner, buildTopRow());
+        header.getChildren().add(dirtyBanner);
         root.setTop(header);
 
-        // Centre: chart with a busy overlay
-        StackPane centre = new StackPane();
-        centre.setPadding(new Insets(0, 12, 0, 12));
-        chartPane.setMaxWidth(Double.MAX_VALUE);
-        VBox.setVgrow(chartPane, Priority.ALWAYS);
-        pollProgress.setMaxSize(64, 64);
-        pollProgress.setVisible(false);
-        pollProgress.setManaged(false);
-        // Accessibility: ProgressIndicator carries no visible text label;
-        // give screen readers something descriptive.
-        pollProgress.setAccessibleText(resources.getString("label.repollProject"));
-        centre.getChildren().addAll(chartPane, pollProgress);
-        StackPane.setAlignment(pollProgress, Pos.CENTER);
-        root.setCenter(centre);
+        // Centre: tabbed chart area. Each tab owns its own header controls
+        // and chart; the shared Advanced section + status bar live below.
+        tabPane.setSide(javafx.geometry.Side.TOP);
+        tabPane.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
+
+        Tab projectTab = new Tab(resources.getString("tab.project"), buildProjectTabContent());
+        Tab currentImageTab = new Tab(resources.getString("tab.currentImage"), buildCurrentImageTabContent());
+        tabPane.getTabs().addAll(projectTab, currentImageTab);
+        BorderPane centreWrap = new BorderPane();
+        centreWrap.setPadding(new Insets(0, 12, 0, 12));
+        centreWrap.setCenter(tabPane);
+        root.setCenter(centreWrap);
 
         VBox bottom = new VBox(8);
         bottom.setPadding(new Insets(0, 12, 12, 12));
@@ -225,7 +230,11 @@ public final class ClassDistributionDialog {
         stage.setOnHidden(e -> handleHidden());
     }
 
-    private HBox buildTopRow() {
+    /**
+     * Builds the Project tab: image-type combo + refresh/cancel controls
+     * stacked above the project chart, with a poll-progress overlay.
+     */
+    private VBox buildProjectTabContent() {
         Label typeLabel = new Label(resources.getString("label.imageType"));
         typeLabel.setTooltip(new Tooltip(resources.getString("tooltip.imageType")));
         typeCombo.setMaxWidth(Double.MAX_VALUE);
@@ -244,7 +253,7 @@ public final class ClassDistributionDialog {
                 return;
             }
             CDPreferences.setLastImageTypeFilter(newV.persistKey());
-            renderChart();
+            renderProjectChart();
         });
 
         repollButton.setTooltip(new Tooltip(resources.getString("tooltip.repoll")));
@@ -264,10 +273,46 @@ public final class ClassDistributionDialog {
         Region spacer = new Region();
         HBox.setHgrow(typeCombo, Priority.ALWAYS);
 
-        HBox row = new HBox(8, typeLabel, typeCombo, spacer, repollButton, cancelButton);
-        row.setAlignment(Pos.CENTER_LEFT);
-        row.setPadding(new Insets(2, 0, 2, 0));
-        return row;
+        HBox topRow = new HBox(8, typeLabel, typeCombo, spacer, repollButton, cancelButton);
+        topRow.setAlignment(Pos.CENTER_LEFT);
+        topRow.setPadding(new Insets(8, 8, 4, 8));
+
+        StackPane chartHolder = new StackPane();
+        chartPane.setMaxWidth(Double.MAX_VALUE);
+        VBox.setVgrow(chartPane, Priority.ALWAYS);
+        pollProgress.setMaxSize(64, 64);
+        pollProgress.setVisible(false);
+        pollProgress.setManaged(false);
+        // Accessibility: ProgressIndicator carries no visible text label;
+        // give screen readers something descriptive.
+        pollProgress.setAccessibleText(resources.getString("label.repollProject"));
+        chartHolder.getChildren().addAll(chartPane, pollProgress);
+        StackPane.setAlignment(pollProgress, Pos.CENTER);
+
+        VBox content = new VBox(4, topRow, chartHolder);
+        VBox.setVgrow(chartHolder, Priority.ALWAYS);
+        return content;
+    }
+
+    /**
+     * Builds the Current Image tab: image-name header above a chart that
+     * reflects only the open image's annotations. Empty when no image is
+     * open.
+     */
+    private VBox buildCurrentImageTabContent() {
+        currentImageHeader.setStyle("-fx-font-weight: bold;");
+        currentImageStatus.setStyle("-fx-text-fill: -fx-text-base-color; -fx-opacity: 0.85;");
+        Region spacer = new Region();
+        HBox.setHgrow(spacer, Priority.ALWAYS);
+        HBox topRow = new HBox(8, currentImageHeader, spacer, currentImageStatus);
+        topRow.setAlignment(Pos.CENTER_LEFT);
+        topRow.setPadding(new Insets(8, 8, 4, 8));
+
+        currentImageChartPane.setMaxWidth(Double.MAX_VALUE);
+        VBox.setVgrow(currentImageChartPane, Priority.ALWAYS);
+
+        VBox content = new VBox(4, topRow, currentImageChartPane);
+        return content;
     }
 
     private HBox buildStatusBar() {
@@ -557,7 +602,16 @@ public final class ClassDistributionDialog {
                 advanced.getPolylineWidthPx());
     }
 
+    /**
+     * Renders both tabs. Cheap; both renders are O(classes) once the cache
+     * has been polled and the open image's hierarchy has been aggregated.
+     */
     private void renderChart() {
+        renderProjectChart();
+        renderCurrentImageChart();
+    }
+
+    private void renderProjectChart() {
         if (qupath.getProject() == null && qupath.getImageData() == null) {
             chartPane.showPlaceholder(resources.getString("empty.noProject"));
             statusSummary.setText("");
@@ -593,6 +647,75 @@ public final class ClassDistributionDialog {
         statusSummary.setText(String.format(
                 resources.getString("status.summaryFormat"),
                 summary.annotationCount(), summary.imageCount()));
+    }
+
+    /**
+     * Renders the Current Image tab from the live hierarchy of whatever
+     * image is open. Bypasses the project cache so it works whether or
+     * not the open image is part of a QuPath project.
+     */
+    private void renderCurrentImageChart() {
+        ImageData<BufferedImage> data = qupath.getImageData();
+        if (data == null) {
+            currentImageHeader.setText(resources.getString("label.currentImageNoneOpen"));
+            currentImageStatus.setText("");
+            currentImageChartPane.showPlaceholder(resources.getString("empty.noOpenImage"));
+            return;
+        }
+        PathObjectHierarchy hierarchy = data.getHierarchy();
+        String name = imageDisplayName(data);
+        currentImageHeader.setText(String.format(
+                resources.getString("label.currentImageHeader"), name));
+
+        if (hierarchy == null) {
+            currentImageStatus.setText("");
+            currentImageChartPane.showPlaceholder(resources.getString("empty.noAnnotationsCurrent"));
+            return;
+        }
+        Map<ContributionCalculator.ClassKey, ContributionCalculator.ClassSummary> contribs =
+                ContributionCalculator.aggregate(
+                        hierarchy.getAnnotationObjects(),
+                        advanced.getPolylineWidthPx());
+        int annotationCount = 0;
+        for (var s : contribs.values()) {
+            annotationCount += s.count();
+        }
+        currentImageStatus.setText(String.format(
+                resources.getString("status.currentImageFormat"), annotationCount));
+
+        if (contribs.isEmpty() || sumContribution(contribs) <= 0.0) {
+            currentImageChartPane.showPlaceholder(resources.getString("empty.noAnnotationsCurrent"));
+            return;
+        }
+        var evaluation = HighlightEvaluator.evaluate(contribs, advanced.getHighlightRatio());
+        currentImageChartPane.refresh(contribs, evaluation,
+                advanced.isShowSliceLabels(),
+                advanced.getOverColorHex(),
+                advanced.getUnderColorHex());
+    }
+
+    /**
+     * Best-effort display name for an open image: project-entry name if
+     * present, else the server display name, else "(open image)".
+     */
+    private String imageDisplayName(ImageData<BufferedImage> data) {
+        Project<BufferedImage> project = qupath.getProject();
+        ProjectImageEntry<BufferedImage> entry = project == null ? null : project.getEntry(data);
+        if (entry != null) {
+            String n = entry.getImageName();
+            if (n != null && !n.isBlank()) {
+                return n;
+            }
+        }
+        try {
+            String n = data.getServer().getMetadata().getName();
+            if (n != null && !n.isBlank()) {
+                return n;
+            }
+        } catch (Exception ignored) {
+            // Fall through.
+        }
+        return resources.getString("label.currentImageUnnamed");
     }
 
     private static double sumContribution(
