@@ -16,29 +16,31 @@ import java.util.Map;
  * <ol>
  *   <li>The class's share of the total (e.g. 0.42 for 42%).</li>
  *   <li>The median share across ALL classes.</li>
- *   <li>An {@link Highlight} verdict using an absolute
- *       percentage-point threshold:
+ *   <li>An {@link Highlight} verdict using a multiplicative ratio:
  *     <ul>
- *       <li>{@link Highlight#OVER} if {@code share - median >= thresholdPct/100}</li>
- *       <li>{@link Highlight#UNDER} if {@code median - share >= thresholdPct/100}</li>
+ *       <li>{@link Highlight#OVER} if {@code share / median >= ratio}</li>
+ *       <li>{@link Highlight#UNDER} if {@code share / median <= 1 / ratio}</li>
  *       <li>{@link Highlight#NORMAL} otherwise.</li>
  *     </ul>
  *   </li>
  * </ol>
  *
- * <p>Earlier versions compared against the median of OTHER classes with a
- * ratio-of-median threshold; in skewed distributions that flagged almost
- * every class. The current implementation uses the global median plus an
- * absolute percentage-point threshold, which reads as "flag a class when
- * its share is more than X percentage points above or below the typical
- * class share."
+ * <p>Earlier versions used absolute percentage-point differences from the
+ * median, but that algorithm is asymmetric for distributions with a small
+ * median -- a class CAN be N percentage points above a small median, but
+ * cannot be N percentage points below it (shares are non-negative). The
+ * multiplicative ratio is symmetric in log-space and flags small
+ * under-represented classes the same way it flags large over-represented
+ * ones.
  *
  * <p>Edge cases:
  * <ul>
  *   <li>Single-class data: every slice is NORMAL (nothing to compare to).</li>
  *   <li>Total contribution is zero: every slice is NORMAL (cannot compute shares).</li>
- *   <li>Threshold of zero: any deviation from the median flags as OVER or
- *       UNDER (noisy; documented at the slider tooltip).</li>
+ *   <li>Median is zero (i.e. fewer than half the classes have any data):
+ *       any class with a positive share is OVER; UNDER cannot fire.</li>
+ *   <li>Ratio &lt;= 1.0: clamped to 1.0 (a ratio of 1 means "any deviation"
+ *       and below 1 has no meaningful interpretation).</li>
  * </ul>
  *
  * @author Mike Nelson
@@ -113,22 +115,22 @@ public final class HighlightEvaluator {
 
     /**
      * Evaluates each class against the global median of all class shares,
-     * flagging slices whose share is more than {@code thresholdPct}
-     * percentage points above or below the median.
+     * flagging slices whose share is at least {@code ratio} times above
+     * or at most {@code 1/ratio} times below the median.
      *
      * @param contributions per-class contribution totals (typically from
      *                      {@link ContributionCalculator#sum(Map, Map)}); never null.
-     * @param thresholdPct absolute percentage-point deviation from the
-     *                     median required to flip a slice from NORMAL to
-     *                     OVER / UNDER. Negative values are treated as zero.
+     * @param ratio multiplicative threshold. Values &lt;= 1.0 are clamped to
+     *              1.0. A ratio of 2.0 means "flag when share is at least
+     *              2x or at most 0.5x the median class share."
      * @return per-class evaluation; never null.
      */
     public static Evaluation evaluate(Map<ClassKey, ClassSummary> contributions,
-                                      double thresholdPct) {
+                                      double ratio) {
         if (contributions == null) {
             contributions = Collections.emptyMap();
         }
-        double thresholdShare = Math.max(0.0, thresholdPct) / 100.0;
+        double k = Math.max(1.0, ratio);
         double total = 0.0;
         for (ClassSummary s : contributions.values()) {
             if (s != null) {
@@ -139,8 +141,8 @@ public final class HighlightEvaluator {
         Map<ClassKey, SliceEval> out = new LinkedHashMap<>();
 
         if (total <= 0.0 || contributions.isEmpty()) {
-            for (ClassKey k : contributions.keySet()) {
-                out.put(k, new SliceEval(0.0, 0.0, Highlight.NORMAL));
+            for (ClassKey c : contributions.keySet()) {
+                out.put(c, new SliceEval(0.0, 0.0, Highlight.NORMAL));
             }
             return new Evaluation(out, total);
         }
@@ -160,25 +162,22 @@ public final class HighlightEvaluator {
 
         for (Map.Entry<ClassKey, Double> e : shares.entrySet()) {
             double share = e.getValue();
-            double diff = share - globalMedian;
             Highlight h;
             if (!canCompare) {
                 h = Highlight.NORMAL;
-            } else if (thresholdShare == 0.0) {
-                // Edge case: threshold zero flags any deviation from the median.
-                if (diff > 1e-9) {
+            } else if (globalMedian <= 0.0) {
+                // Degenerate: more than half the classes are empty. Any
+                // positive share is OVER; nothing can be UNDER.
+                h = share > 0.0 ? Highlight.OVER : Highlight.NORMAL;
+            } else {
+                double r = share / globalMedian;
+                if (r >= k) {
                     h = Highlight.OVER;
-                } else if (diff < -1e-9) {
+                } else if (r <= 1.0 / k) {
                     h = Highlight.UNDER;
                 } else {
                     h = Highlight.NORMAL;
                 }
-            } else if (diff >= thresholdShare) {
-                h = Highlight.OVER;
-            } else if (diff <= -thresholdShare) {
-                h = Highlight.UNDER;
-            } else {
-                h = Highlight.NORMAL;
             }
             out.put(e.getKey(), new SliceEval(share, globalMedian, h));
         }

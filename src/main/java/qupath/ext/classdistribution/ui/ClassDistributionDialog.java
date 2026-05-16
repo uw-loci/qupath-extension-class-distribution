@@ -353,7 +353,7 @@ public final class ClassDistributionDialog {
             recomputeOpenImage();
             renderChart();
         });
-        advanced.onThresholdChanged(t -> renderChart());
+        advanced.onRatioChanged(r -> renderChart());
         advanced.onColorsChanged(colors -> renderChart());
         advanced.onShowLabelsChanged(v -> renderChart());
     }
@@ -585,7 +585,7 @@ public final class ClassDistributionDialog {
             return;
         }
         var evaluation = HighlightEvaluator.evaluate(summary.contributions(),
-                advanced.getHighlightThresholdPct());
+                advanced.getHighlightRatio());
         chartPane.refresh(summary.contributions(), evaluation,
                 advanced.isShowSliceLabels(),
                 advanced.getOverColorHex(),

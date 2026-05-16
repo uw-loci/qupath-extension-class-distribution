@@ -42,8 +42,8 @@ public final class AdvancedSection extends TitledPane {
 
     private static final int POLYLINE_MIN = 1;
     private static final int POLYLINE_MAX = 50;
-    private static final double THRESHOLD_MIN = 0.0;
-    private static final double THRESHOLD_MAX = 200.0;
+    private static final double RATIO_MIN = 1.5;
+    private static final double RATIO_MAX = 10.0;
 
     private final Spinner<Integer> polylineWidthSpinner;
     private final Slider thresholdSlider;
@@ -72,16 +72,17 @@ public final class AdvancedSection extends TitledPane {
         polylineWidthSpinner.setPrefWidth(80);
         polylineWidthSpinner.setTooltip(new Tooltip(resources.getString("tooltip.polylineWidth")));
 
-        // Threshold slider + numeric readout
-        thresholdSlider = new Slider(THRESHOLD_MIN, THRESHOLD_MAX,
-                clampThreshold(CDPreferences.getHighlightThresholdPct()));
+        // Highlight-ratio slider + numeric readout.
+        thresholdSlider = new Slider(RATIO_MIN, RATIO_MAX,
+                clampRatio(CDPreferences.getHighlightRatio()));
         thresholdSlider.setShowTickMarks(true);
         thresholdSlider.setShowTickLabels(true);
-        thresholdSlider.setMajorTickUnit(50);
-        thresholdSlider.setMinorTickCount(4);
-        thresholdSlider.setBlockIncrement(5);
+        thresholdSlider.setMajorTickUnit(2.0);
+        thresholdSlider.setMinorTickCount(3);
+        thresholdSlider.setBlockIncrement(0.5);
+        thresholdSlider.setSnapToTicks(false);
         thresholdSlider.setTooltip(new Tooltip(resources.getString("tooltip.threshold")));
-        thresholdReadout = new Label(formatPct(thresholdSlider.getValue()));
+        thresholdReadout = new Label(formatRatio(thresholdSlider.getValue()));
         thresholdReadout.setMinWidth(46);
 
         // Colour pickers (defaults are Okabe-Ito blue / vermilion for
@@ -149,9 +150,9 @@ public final class AdvancedSection extends TitledPane {
         });
         thresholdSlider.valueProperty().addListener((obs, oldV, newV) -> {
             if (newV != null) {
-                double clamped = clampThreshold(newV.doubleValue());
-                CDPreferences.setHighlightThresholdPct(clamped);
-                thresholdReadout.setText(formatPct(clamped));
+                double clamped = clampRatio(newV.doubleValue());
+                CDPreferences.setHighlightRatio(clamped);
+                thresholdReadout.setText(formatRatio(clamped));
             }
         });
         overPicker.valueProperty().addListener((obs, oldV, newV) -> {
@@ -193,12 +194,12 @@ public final class AdvancedSection extends TitledPane {
     }
 
     /**
-     * Adds a listener that fires whenever the threshold slider changes.
+     * Adds a listener that fires whenever the highlight-ratio slider changes.
      */
-    public void onThresholdChanged(Consumer<Double> listener) {
+    public void onRatioChanged(Consumer<Double> listener) {
         thresholdSlider.valueProperty().addListener((obs, oldV, newV) -> {
             if (newV != null) {
-                listener.accept(clampThreshold(newV.doubleValue()));
+                listener.accept(clampRatio(newV.doubleValue()));
             }
         });
     }
@@ -232,8 +233,8 @@ public final class AdvancedSection extends TitledPane {
         return v == null ? POLYLINE_MIN : clampPolyline(v);
     }
 
-    public double getHighlightThresholdPct() {
-        return clampThreshold(thresholdSlider.getValue());
+    public double getHighlightRatio() {
+        return clampRatio(thresholdSlider.getValue());
     }
 
     public boolean isShowSliceLabels() {
@@ -256,15 +257,15 @@ public final class AdvancedSection extends TitledPane {
         return Math.max(POLYLINE_MIN, Math.min(POLYLINE_MAX, v));
     }
 
-    private static double clampThreshold(double v) {
+    private static double clampRatio(double v) {
         if (Double.isNaN(v)) {
-            return 0.0;
+            return RATIO_MIN;
         }
-        return Math.max(THRESHOLD_MIN, Math.min(THRESHOLD_MAX, v));
+        return Math.max(RATIO_MIN, Math.min(RATIO_MAX, v));
     }
 
-    private static String formatPct(double v) {
-        return String.format("%d%%", (int) Math.round(v));
+    private static String formatRatio(double v) {
+        return String.format("%.1fx", v);
     }
 
     static String toHex(Color c) {

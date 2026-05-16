@@ -9,7 +9,7 @@ plugins {
 qupathExtension {
     name = "qupath-extension-class-distribution"
     group = "io.github.michaelsnelson"
-    version = "0.1.2"
+    version = "0.1.3"
     description = "Live pie chart of annotation class distribution across a QuPath project."
     automaticModule = "io.github.michaelsnelson.extension.classdistribution"
 }

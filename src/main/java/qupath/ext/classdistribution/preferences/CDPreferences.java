@@ -29,15 +29,17 @@ public final class CDPreferences {
     private static final String PREFIX = "classdistribution.";
 
     // Defaults (see ui-ux-draft section 4 table).
-    // Threshold: 30% (Phase 5 PI feedback). 60/30/10 should NOT pass as
-    // balanced for a training-data hygiene tool; false confidence is the
-    // worst failure mode.
+    // Highlight ratio: 2.0 means "flag a class as OVER when its share is
+    // at least 2x the median class share, or UNDER when its share is at
+    // most 0.5x." Symmetric in log-space, so it flags small under-
+    // represented classes the same way it flags large over-represented
+    // ones -- critical for distributions with a small median.
     // Over/Under colours: Okabe-Ito blue / vermilion (Phase 5 grad-student
     // feedback). Standard colourblind-safe "good vs bad" pair; replaces the
     // earlier cyan / red pair which was problematic for protanopia /
     // deuteranopia. Both ColorPickers remain user-overridable.
     private static final int DEFAULT_POLYLINE_WIDTH_PX = 1;
-    private static final double DEFAULT_HIGHLIGHT_THRESHOLD_PCT = 15.0;
+    private static final double DEFAULT_HIGHLIGHT_RATIO = 2.0;
     private static final boolean DEFAULT_SHOW_SLICE_LABELS = true;
     private static final String DEFAULT_LAST_IMAGE_TYPE_FILTER = "";
     private static final String DEFAULT_OVER_COLOR_HEX = "#0072B2";
@@ -50,7 +52,7 @@ public final class CDPreferences {
 
     // Properties (initialised lazily by installPreferences()).
     private static IntegerProperty polylineWidthPxProperty;
-    private static DoubleProperty highlightThresholdPctProperty;
+    private static DoubleProperty highlightRatioProperty;
     private static BooleanProperty showSliceLabelsProperty;
     private static StringProperty lastImageTypeFilterProperty;
     private static StringProperty overColorHexProperty;
@@ -78,12 +80,12 @@ public final class CDPreferences {
 
         polylineWidthPxProperty = PathPrefs.createPersistentPreference(
                 PREFIX + "polylineWidthPx", DEFAULT_POLYLINE_WIDTH_PX);
-        // Key changed from highlightThresholdPct in v0.1.2 because the
-        // algorithm semantics changed (absolute percentage points vs ratio
-        // of median-of-others). Old saved values would misbehave under the
-        // new algorithm; the rename forces a clean default.
-        highlightThresholdPctProperty = PathPrefs.createPersistentPreference(
-                PREFIX + "highlightThresholdPp", DEFAULT_HIGHLIGHT_THRESHOLD_PCT);
+        // Key changed in v0.1.3 because the algorithm became multiplicative
+        // (ratio against the global median rather than absolute percentage
+        // points). Old saved values represented different units and would
+        // misbehave; the rename forces a clean default.
+        highlightRatioProperty = PathPrefs.createPersistentPreference(
+                PREFIX + "highlightRatio", DEFAULT_HIGHLIGHT_RATIO);
         showSliceLabelsProperty = PathPrefs.createPersistentPreference(
                 PREFIX + "showSliceLabels", DEFAULT_SHOW_SLICE_LABELS);
         lastImageTypeFilterProperty = PathPrefs.createPersistentPreference(
@@ -114,8 +116,8 @@ public final class CDPreferences {
         return polylineWidthPxProperty;
     }
 
-    public static DoubleProperty highlightThresholdPctProperty() {
-        return highlightThresholdPctProperty;
+    public static DoubleProperty highlightRatioProperty() {
+        return highlightRatioProperty;
     }
 
     public static BooleanProperty showSliceLabelsProperty() {
@@ -169,14 +171,14 @@ public final class CDPreferences {
         }
     }
 
-    public static double getHighlightThresholdPct() {
-        return highlightThresholdPctProperty != null
-                ? highlightThresholdPctProperty.get() : DEFAULT_HIGHLIGHT_THRESHOLD_PCT;
+    public static double getHighlightRatio() {
+        return highlightRatioProperty != null
+                ? highlightRatioProperty.get() : DEFAULT_HIGHLIGHT_RATIO;
     }
 
-    public static void setHighlightThresholdPct(double v) {
-        if (highlightThresholdPctProperty != null) {
-            highlightThresholdPctProperty.set(v);
+    public static void setHighlightRatio(double v) {
+        if (highlightRatioProperty != null) {
+            highlightRatioProperty.set(v);
         }
     }
 
