@@ -54,11 +54,21 @@ public final class AdvancedSection extends TitledPane {
     private final CheckBox sideBySideCheck;
 
     /**
-     * Builds the section. The supplied {@code resources} bundle must
-     * contain every key from {@code strings.properties} that the section
-     * uses (see source for the exact list).
+     * Builds the section with all controls visible. The supplied
+     * {@code resources} bundle must contain every key from
+     * {@code strings.properties} that the section uses (see source for the
+     * exact list).
      */
     public AdvancedSection(ResourceBundle resources) {
+        this(resources, true);
+    }
+
+    /**
+     * Builds the section. When {@code showPolylineWidth} is false the
+     * polyline-width row is omitted -- useful for the detection-training
+     * dialog where polyline ROIs are not a labeling mechanism.
+     */
+    public AdvancedSection(ResourceBundle resources, boolean showPolylineWidth) {
         super(resources.getString("section.advanced"), null);
         setCollapsible(true);
         setExpanded(CDPreferences.isAdvancedSectionExpanded());
@@ -115,13 +125,15 @@ public final class AdvancedSection extends TitledPane {
         grid.setVgap(10);
         grid.setPadding(new Insets(10, 12, 10, 12));
 
-        // Row 0: polyline width
-        Label polylineLabel = new Label(resources.getString("label.polylineWidth"));
-        polylineLabel.setTooltip(new Tooltip(resources.getString("tooltip.polylineWidth")));
-        Label polylineSuffix = new Label(resources.getString("label.polylineWidthSuffix"));
-        HBox polylineRow = new HBox(6, polylineLabel, polylineWidthSpinner, polylineSuffix);
-        polylineRow.setAlignment(Pos.CENTER_LEFT);
-        grid.add(polylineRow, 0, 0, 4, 1);
+        // Row 0: polyline width (omitted for the detection-training dialog).
+        if (showPolylineWidth) {
+            Label polylineLabel = new Label(resources.getString("label.polylineWidth"));
+            polylineLabel.setTooltip(new Tooltip(resources.getString("tooltip.polylineWidth")));
+            Label polylineSuffix = new Label(resources.getString("label.polylineWidthSuffix"));
+            HBox polylineRow = new HBox(6, polylineLabel, polylineWidthSpinner, polylineSuffix);
+            polylineRow.setAlignment(Pos.CENTER_LEFT);
+            grid.add(polylineRow, 0, 0, 4, 1);
+        }
 
         // Row 1: threshold slider
         Label thresholdLabel = new Label(resources.getString("label.threshold"));

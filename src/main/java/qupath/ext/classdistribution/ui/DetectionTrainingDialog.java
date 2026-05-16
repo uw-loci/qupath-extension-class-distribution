@@ -33,9 +33,10 @@ import javafx.util.StringConverter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import qupath.ext.classdistribution.core.ContributionCalculator;
+import qupath.ext.classdistribution.core.DetectionLabelCalculator;
+import qupath.ext.classdistribution.core.DetectionTrainingCache;
+import qupath.ext.classdistribution.core.DetectionTrainingCache.FilterSummary;
 import qupath.ext.classdistribution.core.HighlightEvaluator;
-import qupath.ext.classdistribution.core.ProjectAnnotationCache;
-import qupath.ext.classdistribution.core.ProjectAnnotationCache.FilterSummary;
 import qupath.ext.classdistribution.preferences.CDPreferences;
 import qupath.fx.dialogs.Dialogs;
 import qupath.lib.gui.QuPathGUI;
@@ -55,59 +56,46 @@ import java.util.Map;
 import java.util.ResourceBundle;
 
 /**
- * Single non-modal {@link Stage} that hosts the chart, the live listeners,
- * the dirty banner, and the project-poll plumbing.
+ * Sister of {@link ClassDistributionDialog}, but the chart is driven by
+ * how many DETECTIONS each class would label given the current set of
+ * training annotations (area annotations enclosing detections, or
+ * point annotations dropped on individual detections). Mirrors the
+ * exact labeling logic in QuPath's Object Classifier command -- see
+ * {@link DetectionLabelCalculator}.
  *
- * <p>Architecture (Phase 1 design, section 1):
- * <ul>
- *   <li>Owns the {@link ProjectAnnotationCache} (per-image rows) and the
- *       {@link ChartPane} (pure JavaFX).</li>
- *   <li>Listens to the open image's hierarchy and re-renders on
- *       annotation changes. Filters {@code event.isChanging()} per
- *       gated-classifier's pattern
- *       ({@code GatedClassifierDialog.java:494-553}).</li>
- *   <li>Listens to {@code qupath.imageDataProperty()} and {@code
- *       qupath.projectProperty()}; on image switch, rebinds (does not
- *       close, contra gated-classifier).</li>
- *   <li>Single-instance: re-invoking the menu raises the existing window
- *       via {@link Stage#toFront()} rather than spawning a duplicate.</li>
- * </ul>
+ * <p>Layout mirrors {@link ClassDistributionDialog}: Project + Current
+ * Image either as tabs or side-by-side, shared Advanced section, shared
+ * project status bar. The polyline-width control is hidden in this
+ * dialog's Advanced section because polylines are not a labeling
+ * mechanism for detections.
  *
  * @author Mike Nelson
  */
-public final class ClassDistributionDialog {
+public final class DetectionTrainingDialog {
 
-    private static final Logger logger = LoggerFactory.getLogger(ClassDistributionDialog.class);
+    private static final Logger logger = LoggerFactory.getLogger(DetectionTrainingDialog.class);
 
     private static final ResourceBundle resources =
             ResourceBundle.getBundle("qupath.ext.classdistribution.strings");
 
-    /** Sentinel filter value meaning "include every cached image". */
-    private static final ImageTypeFilter ALL_TYPES_FILTER =
-            new ImageTypeFilter(null, resources.getString("imagetype.allTypes"));
+    private static final ClassDistributionDialog.ImageTypeFilter ALL_TYPES_FILTER =
+            new ClassDistributionDialog.ImageTypeFilter(null,
+                    resources.getString("imagetype.allTypes"));
 
-    /** Sentinel filter value matching only UNSET / null image types. */
-    private static final ImageTypeFilter UNSET_FILTER =
-            new ImageTypeFilter(ImageData.ImageType.UNSET, resources.getString("imagetype.unset"));
+    private static final ClassDistributionDialog.ImageTypeFilter UNSET_FILTER =
+            new ClassDistributionDialog.ImageTypeFilter(ImageData.ImageType.UNSET,
+                    resources.getString("imagetype.unset"));
 
-    // Date + time in the timestamp so a long-running session that crosses
-    // midnight (or multiple days) is unambiguous in screenshots and audit
-    // notes (Phase 5 PI feedback). ISO-style is locale-neutral and ASCII.
     private static final DateTimeFormatter TIME_FORMAT =
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
 
-    /**
-     * Single-instance singleton. Static reference is cleared in
-     * {@link #stage}'s {@code setOnHidden(...)} so a second invocation
-     * after close opens a fresh dialog.
-     */
-    private static ClassDistributionDialog INSTANCE;
+    private static DetectionTrainingDialog INSTANCE;
 
     private final QuPathGUI qupath;
     private final Stage stage;
-    private final ProjectAnnotationCache cache = new ProjectAnnotationCache();
+    private final DetectionTrainingCache cache = new DetectionTrainingCache();
 
-    private final ComboBox<ImageTypeFilter> typeCombo = new ComboBox<>();
+    private final ComboBox<ClassDistributionDialog.ImageTypeFilter> typeCombo = new ComboBox<>();
     private final Button repollButton = new Button(resources.getString("label.repollProject"));
     private final Button cancelButton = new Button(resources.getString("label.repollCancel"));
     private final ProgressIndicator pollProgress = new ProgressIndicator();
@@ -125,30 +113,25 @@ public final class ClassDistributionDialog {
     private final Label statusSummary = new Label("");
     private final Label statusLastPolled = new Label(resources.getString("status.lastPolledNever"));
 
-    // Listener references kept so we can detach in setOnHidden.
     private PathObjectHierarchy boundHierarchy;
     private PathObjectHierarchyListener hierarchyListener;
     private ChangeListener<ImageData<BufferedImage>> imageDataListener;
     private ChangeListener<Project<BufferedImage>> projectListener;
 
     private final BooleanProperty pollInProgress = new SimpleBooleanProperty(false);
-    /** The currently-running refresh task (for cancellation). Null when idle. */
     private Task<Void> currentTask;
 
-    private ClassDistributionDialog(QuPathGUI qupath) {
+    private DetectionTrainingDialog(QuPathGUI qupath) {
         this.qupath = qupath;
         this.stage = new Stage();
         this.dirtyBanner = new DirtyBanner(qupath, resources);
         this.chartPane = new ChartPane(resources);
         this.currentImageChartPane = new ChartPane(resources);
-        this.advanced = new AdvancedSection(resources);
+        // Hide polyline-width control -- not a labeling mechanism for detections.
+        this.advanced = new AdvancedSection(resources, false);
         configureStage();
     }
 
-    /**
-     * Opens the dialog, or raises the existing instance if one is already
-     * showing. Safe to call from any thread.
-     */
     public static void showDialog(QuPathGUI qupath) {
         if (qupath == null) {
             return;
@@ -159,11 +142,8 @@ public final class ClassDistributionDialog {
                 INSTANCE.stage.requestFocus();
                 return;
             }
-            INSTANCE = new ClassDistributionDialog(qupath);
+            INSTANCE = new DetectionTrainingDialog(qupath);
             INSTANCE.stage.show();
-            // Wire post-show side effects (listeners, initial poll) once the
-            // window is on screen so listener detach in setOnHidden runs
-            // even if the user closes immediately.
             INSTANCE.attachListenersAfterShow();
             INSTANCE.startInitialPoll();
         };
@@ -179,7 +159,7 @@ public final class ClassDistributionDialog {
     // ------------------------------------------------------------------
 
     private void configureStage() {
-        stage.setTitle(resources.getString("dialog.title"));
+        stage.setTitle(resources.getString("dialog.titleDetections"));
         stage.initOwner(qupath.getStage());
         stage.initModality(Modality.NONE);
 
@@ -191,11 +171,6 @@ public final class ClassDistributionDialog {
         header.getChildren().add(dirtyBanner);
         root.setTop(header);
 
-        // Centre: tabbed OR side-by-side chart area. Each pane owns its own
-        // header controls and chart; the shared Advanced section + status
-        // bar live below. The two content VBoxes are reused -- on toggle
-        // they are detached from one container and re-attached to the
-        // other (a JavaFX node can only have one parent).
         tabPane.setSide(javafx.geometry.Side.TOP);
         tabPane.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
         sideBySidePane.setOrientation(javafx.geometry.Orientation.HORIZONTAL);
@@ -213,10 +188,6 @@ public final class ClassDistributionDialog {
         root.setBottom(bottom);
 
         Scene scene = new Scene(root);
-        // Escape closes the dialog (UX checklist: same as Cancel; pattern
-        // borrowed from channel-names-viewer ChannelLegendStage line 432-440).
-        // Use an event filter so the stage gets the key press before any
-        // focused control consumes it.
         scene.addEventFilter(KeyEvent.KEY_PRESSED, e -> {
             if (e.getCode() == KeyCode.ESCAPE) {
                 stage.hide();
@@ -227,21 +198,15 @@ public final class ClassDistributionDialog {
         stage.setMinWidth(420);
         stage.setMinHeight(480);
 
-        // Restore size + position from preferences.
         double width = clampDimension(CDPreferences.getDialogWidth(), 420.0, 2400.0, 520.0);
         double height = clampDimension(CDPreferences.getDialogHeight(), 480.0, 1800.0, 620.0);
         stage.setWidth(width);
         stage.setHeight(height);
         applyPersistedPosition();
 
-        // Persist size + position on hide.
         stage.setOnHidden(e -> handleHidden());
     }
 
-    /**
-     * Builds the Project tab: image-type combo + refresh/cancel controls
-     * stacked above the project chart, with a poll-progress overlay.
-     */
     private VBox buildProjectTabContent() {
         Label sectionHeader = new Label(resources.getString("label.projectHeader"));
         sectionHeader.setStyle("-fx-font-weight: bold;");
@@ -250,11 +215,11 @@ public final class ClassDistributionDialog {
         typeLabel.setTooltip(new Tooltip(resources.getString("tooltip.imageType")));
         typeCombo.setMaxWidth(Double.MAX_VALUE);
         typeCombo.setTooltip(new Tooltip(resources.getString("tooltip.imageType")));
-        typeCombo.setConverter(new StringConverter<ImageTypeFilter>() {
-            @Override public String toString(ImageTypeFilter f) {
+        typeCombo.setConverter(new StringConverter<>() {
+            @Override public String toString(ClassDistributionDialog.ImageTypeFilter f) {
                 return f == null ? "" : f.label();
             }
-            @Override public ImageTypeFilter fromString(String s) {
+            @Override public ClassDistributionDialog.ImageTypeFilter fromString(String s) {
                 return null;
             }
         });
@@ -271,7 +236,6 @@ public final class ClassDistributionDialog {
         repollButton.setOnAction(e -> startProjectPoll());
         repollButton.disableProperty().bind(qupath.projectProperty().isNull().or(pollInProgress));
 
-        // Cancel button: visible only while a refresh task is running.
         cancelButton.setTooltip(new Tooltip(resources.getString("tooltip.repollCancel")));
         cancelButton.setOnAction(e -> {
             if (currentTask != null) {
@@ -288,8 +252,8 @@ public final class ClassDistributionDialog {
         topRow.setAlignment(Pos.CENTER_LEFT);
         topRow.setPadding(new Insets(0, 8, 4, 8));
 
-        VBox header = new VBox(4, sectionHeader, topRow);
-        header.setPadding(new Insets(8, 0, 0, 0));
+        VBox headerBox = new VBox(4, sectionHeader, topRow);
+        headerBox.setPadding(new Insets(8, 0, 0, 0));
 
         StackPane chartHolder = new StackPane();
         chartPane.setMaxWidth(Double.MAX_VALUE);
@@ -297,22 +261,15 @@ public final class ClassDistributionDialog {
         pollProgress.setMaxSize(64, 64);
         pollProgress.setVisible(false);
         pollProgress.setManaged(false);
-        // Accessibility: ProgressIndicator carries no visible text label;
-        // give screen readers something descriptive.
         pollProgress.setAccessibleText(resources.getString("label.repollProject"));
         chartHolder.getChildren().addAll(chartPane, pollProgress);
         StackPane.setAlignment(pollProgress, Pos.CENTER);
 
-        VBox content = new VBox(4, header, chartHolder);
+        VBox content = new VBox(4, headerBox, chartHolder);
         VBox.setVgrow(chartHolder, Priority.ALWAYS);
         return content;
     }
 
-    /**
-     * Builds the Current Image tab: image-name header above a chart that
-     * reflects only the open image's annotations. Empty when no image is
-     * open.
-     */
     private VBox buildCurrentImageTabContent() {
         currentImageHeader.setStyle("-fx-font-weight: bold;");
         currentImageStatus.setStyle("-fx-text-fill: -fx-text-base-color; -fx-opacity: 0.85;");
@@ -348,8 +305,6 @@ public final class ClassDistributionDialog {
         if (Double.isNaN(x) || Double.isNaN(y)) {
             return;
         }
-        // Clamp into the union of currently-connected screens so a window
-        // saved on a now-disconnected monitor still becomes visible.
         boolean inAnyScreen = false;
         for (var screen : Screen.getScreens()) {
             Rectangle2D b = screen.getVisualBounds();
@@ -377,7 +332,6 @@ public final class ClassDistributionDialog {
     // ------------------------------------------------------------------
 
     private void attachListenersAfterShow() {
-        // Image-data switch: rebind (do NOT close; design directive 2.1.5).
         imageDataListener = (obs, oldData, newData) -> Platform.runLater(() -> {
             if (!stage.isShowing()) {
                 return;
@@ -387,7 +341,6 @@ public final class ClassDistributionDialog {
         });
         qupath.imageDataProperty().addListener(imageDataListener);
 
-        // Project change: clear cache, rebuild combo, re-poll.
         projectListener = (obs, oldP, newP) -> Platform.runLater(() -> {
             if (!stage.isShowing()) {
                 return;
@@ -401,14 +354,11 @@ public final class ClassDistributionDialog {
         });
         qupath.projectProperty().addListener(projectListener);
 
-        // Initial bind to the open image (if any).
         rebindHierarchy(qupath.getImageData());
 
-        // Wire Advanced controls back into the chart.
+        // Polyline width is not exposed in this dialog, but the listener is
+        // still wired (no-op for detection labels).
         advanced.onPolylineWidthChanged(v -> {
-            // Polyline width affects every cached row's contributions, so
-            // we have to recompute the open image (cheap; uses the live
-            // hierarchy) and warn that a re-poll is needed for the rest.
             recomputeOpenImage();
             renderChart();
         });
@@ -418,14 +368,7 @@ public final class ClassDistributionDialog {
         advanced.onSideBySideChanged(this::applyDisplayMode);
     }
 
-    /**
-     * Swaps the centre between a {@link TabPane} (tabs) and a {@link SplitPane}
-     * (horizontal split). The two content VBoxes are reused; only their
-     * parent container changes. Re-renders both panes afterwards so any
-     * placeholder text is up to date.
-     */
     private void applyDisplayMode(boolean sideBySide) {
-        // Detach from whichever container currently holds the content.
         tabPane.getTabs().clear();
         sideBySidePane.getItems().clear();
 
@@ -445,7 +388,6 @@ public final class ClassDistributionDialog {
     }
 
     private void rebindHierarchy(ImageData<BufferedImage> imageData) {
-        // Detach from the old hierarchy first.
         if (boundHierarchy != null && hierarchyListener != null) {
             try {
                 boundHierarchy.removeListener(hierarchyListener);
@@ -491,7 +433,6 @@ public final class ClassDistributionDialog {
     }
 
     private void handleHidden() {
-        // Detach all listeners.
         if (boundHierarchy != null && hierarchyListener != null) {
             try {
                 boundHierarchy.removeListener(hierarchyListener);
@@ -509,12 +450,10 @@ public final class ClassDistributionDialog {
             qupath.projectProperty().removeListener(projectListener);
             projectListener = null;
         }
-        // Persist position + size.
         CDPreferences.setDialogX(stage.getX());
         CDPreferences.setDialogY(stage.getY());
         CDPreferences.setDialogWidth(stage.getWidth());
         CDPreferences.setDialogHeight(stage.getHeight());
-        // Clear singleton so a fresh instance opens next time.
         if (INSTANCE == this) {
             INSTANCE = null;
         }
@@ -526,7 +465,6 @@ public final class ClassDistributionDialog {
     // ------------------------------------------------------------------
 
     private void startInitialPoll() {
-        // Render whatever is currently in the (empty) cache, then kick a poll.
         renderChart();
         if (qupath.getProject() != null) {
             startProjectPoll();
@@ -549,17 +487,13 @@ public final class ClassDistributionDialog {
         pollProgress.setProgress(0);
         chartPane.setBusy(true);
 
-        int polylineWidth = advanced.getPolylineWidthPx();
         int total = project.getImageList().size();
-        // NOTE: status / progress strings use printf-style placeholders
-        // (%d, %s) and are formatted via String.format. Only
-        // empty.noMatchingImages uses MessageFormat ({0}) syntax.
         repollButton.setText(String.format(resources.getString("label.repollProgress"), 0, total));
 
         final Task<Void> task = new Task<>() {
             @Override
             protected Void call() {
-                cache.repollAll(project, polylineWidth, progress -> {
+                cache.repollAll(project, progress -> {
                     int processed = (int) Math.round(progress * total);
                     Platform.runLater(() -> {
                         pollProgress.setProgress(progress);
@@ -576,26 +510,18 @@ public final class ClassDistributionDialog {
         currentTask = task;
         task.setOnSucceeded(e -> {
             finishPoll(true);
-            // Recompute the open image's row from its live hierarchy
-            // (the cache poll loaded the *saved* version from disk).
             recomputeOpenImage();
             statusLastPolled.setText(String.format(
                     resources.getString("status.lastPolledFormat"),
                     LocalDateTime.now().format(TIME_FORMAT)));
-            // First poll: pick the user's persisted filter or compute a default.
             initialiseFilter();
             renderChart();
         });
         task.setOnCancelled(e -> {
-            // Show a brief "cancelled" status before returning to idle. The
-            // partial cache is left intact so the chart still reflects what
-            // was loaded before the user pressed Cancel.
             finishPoll(false);
             repollButton.setText(resources.getString("label.repollCancelled"));
             recomputeOpenImage();
             renderChart();
-            // Reset the button label after a short delay so the user sees
-            // the cancelled state but the dialog returns to idle.
             javafx.animation.PauseTransition pause =
                     new javafx.animation.PauseTransition(javafx.util.Duration.seconds(2));
             pause.setOnFinished(ev -> repollButton.setText(
@@ -611,7 +537,7 @@ public final class ClassDistributionDialog {
                     resources.getString("notify.repollFailedBody"));
         });
 
-        Thread t = new Thread(task, "ClassDistribution-Refresh");
+        Thread t = new Thread(task, "DetectionTraining-Refresh");
         t.setDaemon(true);
         t.start();
     }
@@ -639,14 +565,9 @@ public final class ClassDistributionDialog {
         }
         Project<BufferedImage> project = qupath.getProject();
         ProjectImageEntry<BufferedImage> entry = project == null ? null : project.getEntry(data);
-        cache.updateOpen(entry, data.getImageType(), data.getHierarchy(),
-                advanced.getPolylineWidthPx());
+        cache.updateOpen(entry, data.getImageType(), data.getHierarchy());
     }
 
-    /**
-     * Renders both tabs. Cheap; both renders are O(classes) once the cache
-     * has been polled and the open image's hierarchy has been aggregated.
-     */
     private void renderChart() {
         renderProjectChart();
         renderCurrentImageChart();
@@ -658,25 +579,26 @@ public final class ClassDistributionDialog {
             statusSummary.setText("");
             return;
         }
-        ImageTypeFilter filter = typeCombo.getValue();
+        ClassDistributionDialog.ImageTypeFilter filter = typeCombo.getValue();
         if (filter == null) {
             filter = ALL_TYPES_FILTER;
         }
 
         FilterSummary summary = cache.summarize(filter.imageType());
         if (summary.imageCount() == 0 && filter != ALL_TYPES_FILTER) {
-            // empty.noMatchingImages uses {0} -> MessageFormat.
             chartPane.showPlaceholder(MessageFormat.format(
                     resources.getString("empty.noMatchingImages"), filter.label()));
             statusSummary.setText(String.format(
-                    resources.getString("status.summaryFormat"), 0, 0));
+                    resources.getString("status.detectionsSummaryFormat"), 0, 0, 0));
             return;
         }
         if (summary.contributions().isEmpty() || sumContribution(summary.contributions()) <= 0.0) {
-            chartPane.showPlaceholder(resources.getString("empty.noAnnotations"));
+            chartPane.showPlaceholder(resources.getString("empty.noDetectionLabels"));
             statusSummary.setText(String.format(
-                    resources.getString("status.summaryFormat"),
-                    summary.annotationCount(), summary.imageCount()));
+                    resources.getString("status.detectionsSummaryFormat"),
+                    summary.distinctLabeledDetections(),
+                    summary.trainingAnnotationCount(),
+                    summary.imageCount()));
             return;
         }
         var evaluation = HighlightEvaluator.evaluate(summary.contributions(),
@@ -686,15 +608,12 @@ public final class ClassDistributionDialog {
                 advanced.getOverColorHex(),
                 advanced.getUnderColorHex());
         statusSummary.setText(String.format(
-                resources.getString("status.summaryFormat"),
-                summary.annotationCount(), summary.imageCount()));
+                resources.getString("status.detectionsSummaryFormat"),
+                summary.distinctLabeledDetections(),
+                summary.trainingAnnotationCount(),
+                summary.imageCount()));
     }
 
-    /**
-     * Renders the Current Image tab from the live hierarchy of whatever
-     * image is open. Bypasses the project cache so it works whether or
-     * not the open image is part of a QuPath project.
-     */
     private void renderCurrentImageChart() {
         ImageData<BufferedImage> data = qupath.getImageData();
         if (data == null) {
@@ -710,35 +629,32 @@ public final class ClassDistributionDialog {
 
         if (hierarchy == null) {
             currentImageStatus.setText("");
-            currentImageChartPane.showPlaceholder(resources.getString("empty.noAnnotationsCurrent"));
+            currentImageChartPane.showPlaceholder(resources.getString("empty.noDetectionLabelsCurrent"));
             return;
         }
-        Map<ContributionCalculator.ClassKey, ContributionCalculator.ClassSummary> contribs =
-                ContributionCalculator.aggregate(
-                        hierarchy.getAnnotationObjects(),
-                        advanced.getPolylineWidthPx());
-        int annotationCount = 0;
-        for (var s : contribs.values()) {
-            annotationCount += s.count();
-        }
+        DetectionLabelCalculator.Result result = DetectionLabelCalculator.aggregate(hierarchy);
         currentImageStatus.setText(String.format(
-                resources.getString("status.currentImageFormat"), annotationCount));
+                resources.getString("status.currentImageDetectionsFormat"),
+                result.distinctLabeledDetections(),
+                result.trainingAnnotationCount()));
 
+        var contribs = new java.util.LinkedHashMap<>(result.perClass());
         if (contribs.isEmpty() || sumContribution(contribs) <= 0.0) {
-            currentImageChartPane.showPlaceholder(resources.getString("empty.noAnnotationsCurrent"));
+            currentImageChartPane.showPlaceholder(resources.getString("empty.noDetectionLabelsCurrent"));
             return;
         }
 
-        // Add a zero-contribution placeholder for every project class the
-        // open image has none of. HighlightEvaluator detects the (0, 0)
-        // pair and flags them Highlight.MISSING; ChartPane renders them
-        // legend-only with the yellow MISSING marker.
+        // Inject MISSING placeholders for project classes the open image has
+        // no labeled detections of. HighlightEvaluator picks them up via
+        // their zero (count, total) and ChartPane renders them legend-only.
         var projectSummary = cache.summarize(null);
         for (var projKey : projectSummary.contributions().keySet()) {
             if (!contribs.containsKey(projKey)) {
-                contribs.put(projKey, new ContributionCalculator.ClassSummary(0.0, 0));
+                contribs.put(projKey,
+                        new ContributionCalculator.ClassSummary(0.0, 0));
             }
         }
+
         var evaluation = HighlightEvaluator.evaluate(contribs, advanced.getHighlightRatio());
         currentImageChartPane.refresh(contribs, evaluation,
                 advanced.isShowSliceLabels(),
@@ -746,10 +662,6 @@ public final class ClassDistributionDialog {
                 advanced.getUnderColorHex());
     }
 
-    /**
-     * Best-effort display name for an open image: project-entry name if
-     * present, else the server display name, else "(open image)".
-     */
     private String imageDisplayName(ImageData<BufferedImage> data) {
         Project<BufferedImage> project = qupath.getProject();
         ProjectImageEntry<BufferedImage> entry = project == null ? null : project.getEntry(data);
@@ -784,25 +696,23 @@ public final class ClassDistributionDialog {
     // ------------------------------------------------------------------
 
     private void rebuildTypeComboItems() {
-        ImageTypeFilter previous = typeCombo.getValue();
-        List<ImageTypeFilter> items = new ArrayList<>();
+        ClassDistributionDialog.ImageTypeFilter previous = typeCombo.getValue();
+        List<ClassDistributionDialog.ImageTypeFilter> items = new ArrayList<>();
         items.add(ALL_TYPES_FILTER);
         Map<ImageData.ImageType, Integer> counts = cache.typeCounts();
-        // Always offer every QuPath enum value so the user can pre-select
-        // a type before the cache has any rows of that type.
         for (ImageData.ImageType t : ImageData.ImageType.values()) {
             if (t == ImageData.ImageType.UNSET) {
                 continue;
             }
             int n = counts.getOrDefault(t, 0);
             String suffix = n > 0 ? " (" + n + ")" : "";
-            items.add(new ImageTypeFilter(t, prettyTypeName(t) + suffix));
+            items.add(new ClassDistributionDialog.ImageTypeFilter(t,
+                    prettyTypeName(t) + suffix));
         }
         items.add(UNSET_FILTER);
         typeCombo.setItems(FXCollections.observableArrayList(items));
-        // Restore previous selection by persistKey if possible.
         if (previous != null) {
-            for (ImageTypeFilter f : items) {
+            for (var f : items) {
                 if (java.util.Objects.equals(f.persistKey(), previous.persistKey())) {
                     typeCombo.getSelectionModel().select(f);
                     return;
@@ -812,21 +722,11 @@ public final class ClassDistributionDialog {
         typeCombo.getSelectionModel().select(ALL_TYPES_FILTER);
     }
 
-    /**
-     * Picks the dialog's initial filter after the first project poll
-     * completes. Order of preference:
-     * <ol>
-     *   <li>The user's persisted last filter (if it still matches a row).</li>
-     *   <li>The currently open image's type (never UNSET as auto-default).</li>
-     *   <li>The most common non-UNSET type in the cache.</li>
-     *   <li>"All types".</li>
-     * </ol>
-     */
     private void initialiseFilter() {
         String persisted = CDPreferences.getLastImageTypeFilter();
-        ImageTypeFilter chosen = null;
+        ClassDistributionDialog.ImageTypeFilter chosen = null;
         if (persisted != null && !persisted.isEmpty()) {
-            for (ImageTypeFilter f : typeCombo.getItems()) {
+            for (var f : typeCombo.getItems()) {
                 if (persisted.equals(f.persistKey())) {
                     chosen = f;
                     break;
@@ -852,8 +752,8 @@ public final class ClassDistributionDialog {
         typeCombo.getSelectionModel().select(chosen);
     }
 
-    private ImageTypeFilter findFilterFor(ImageData.ImageType t) {
-        for (ImageTypeFilter f : typeCombo.getItems()) {
+    private ClassDistributionDialog.ImageTypeFilter findFilterFor(ImageData.ImageType t) {
+        for (var f : typeCombo.getItems()) {
             if (f.imageType() == t) {
                 return f;
             }
@@ -861,10 +761,6 @@ public final class ClassDistributionDialog {
         return null;
     }
 
-    /**
-     * Prettier label for a {@link ImageData.ImageType} enum value
-     * (replaces underscores with spaces, title-cases tokens).
-     */
     private static String prettyTypeName(ImageData.ImageType t) {
         if (t == null) {
             return "";
@@ -884,58 +780,5 @@ public final class ClassDistributionDialog {
             }
         }
         return sb.toString();
-    }
-
-    // ------------------------------------------------------------------
-    // Filter value type
-    // ------------------------------------------------------------------
-
-    /**
-     * One entry in the ImageType ComboBox. {@code imageType == null} means
-     * "All types"; {@code imageType == UNSET} means the explicit Unset
-     * bucket.
-     */
-    static final class ImageTypeFilter {
-        private final ImageData.ImageType imageType;
-        private final String label;
-
-        ImageTypeFilter(ImageData.ImageType imageType, String label) {
-            this.imageType = imageType;
-            this.label = label == null ? "" : label;
-        }
-
-        ImageData.ImageType imageType() {
-            return imageType;
-        }
-
-        String label() {
-            return label;
-        }
-
-        /**
-         * String key that survives across sessions. Empty for "all types"
-         * (matches the empty-string default of
-         * {@link CDPreferences#getLastImageTypeFilter()}).
-         */
-        String persistKey() {
-            return imageType == null ? "" : imageType.name();
-        }
-
-        @Override
-        public boolean equals(Object o) {
-            if (this == o) return true;
-            if (!(o instanceof ImageTypeFilter other)) return false;
-            return java.util.Objects.equals(imageType, other.imageType);
-        }
-
-        @Override
-        public int hashCode() {
-            return imageType == null ? 0 : imageType.hashCode();
-        }
-
-        @Override
-        public String toString() {
-            return label;
-        }
     }
 }

@@ -6,6 +6,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import qupath.ext.classdistribution.preferences.CDPreferences;
 import qupath.ext.classdistribution.ui.ClassDistributionDialog;
+import qupath.ext.classdistribution.ui.DetectionTrainingDialog;
 import qupath.lib.common.Version;
 import qupath.lib.gui.QuPathGUI;
 import qupath.lib.gui.extensions.GitHubProject;
@@ -78,10 +79,8 @@ public class ClassDistributionExtension implements QuPathExtension, GitHubProjec
             ClassDistributionDialog.showDialog(qupath);
         });
         // Note: JavaFX MenuItem does not natively support tooltips on hover.
-        // The tooltip.menu.show resource is exposed only for the user guide;
-        // hover help on a menu item is a known JavaFX limitation we accept
-        // for v0.1.0. (The previous Tooltip.install(...) call here installed
-        // onto a throw-away Label and accomplished nothing.)
+        // The tooltip.menu.* resources are exposed only for the user guide;
+        // hover help on a menu item is a known JavaFX limitation we accept.
 
         // Note: we deliberately do NOT bind disableProperty to imageData /
         // project. The dialog is useful even when no project is open
@@ -90,7 +89,13 @@ public class ClassDistributionExtension implements QuPathExtension, GitHubProjec
         // after the user closes their image. Compare with
         // ConfusionMatrixExtension.java:91 which DOES require an open image.
 
-        extensionMenu.getItems().add(showItem);
+        MenuItem showDetectionsItem = new MenuItem(resources.getString("menu.showDetections"));
+        showDetectionsItem.setOnAction(e -> {
+            logger.info("Opening Detection Training Distribution dialog");
+            DetectionTrainingDialog.showDialog(qupath);
+        });
+
+        extensionMenu.getItems().addAll(showItem, showDetectionsItem);
         logger.info("Menu items added for extension: {}", EXTENSION_NAME);
     }
 }
