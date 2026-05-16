@@ -22,6 +22,8 @@ import qupath.ext.classdistribution.core.ContributionCalculator.ClassSummary;
 import qupath.ext.classdistribution.core.HighlightEvaluator.Evaluation;
 import qupath.ext.classdistribution.core.HighlightEvaluator.Highlight;
 import qupath.ext.classdistribution.core.HighlightEvaluator.SliceEval;
+import qupath.lib.common.ColorTools;
+import qupath.lib.gui.prefs.PathPrefs;
 import qupath.lib.objects.classes.PathClass;
 
 import java.util.LinkedHashMap;
@@ -71,13 +73,11 @@ public final class ChartPane extends VBox {
     public static final int SLICE_LABEL_SUPPRESS_THRESHOLD = 10;
 
     /**
-     * Default slice colour used when the {@link PathClass} carries no colour
-     * (rare in practice; QuPath assigns colours by default).
+     * Last-resort fallback if the default-object colour preference cannot be
+     * read (defensive only; in practice {@link PathPrefs#colorDefaultObjectsProperty()}
+     * always returns a value).
      */
     private static final String DEFAULT_SLICE_COLOR = "rgb(170,170,170)";
-
-    /** Grey used for the Unclassified bucket. ASCII hex literal. */
-    private static final String UNCLASSIFIED_SLICE_COLOR = "rgb(136,136,136)";
 
     private final ResourceBundle resources;
     private final PieChart pieChart;
@@ -303,26 +303,40 @@ public final class ChartPane extends VBox {
     }
 
     /**
-     * Base colour for one slice -- always the {@link PathClass} colour
-     * stored in QuPath, or grey for the Unclassified bucket. Highlight
-     * verdict is conveyed separately via {@link #applySliceEffect}.
+     * Base colour for one slice -- the {@link PathClass} colour stored in
+     * QuPath, or the user's default-object colour from
+     * {@link PathPrefs#colorDefaultObjectsProperty()} for the Unclassified
+     * bucket (matches how QuPath paints unclassified annotations in the
+     * viewer). Highlight verdict is conveyed separately via
+     * {@link #applySliceEffect}.
      */
     private static String baseColorFor(ClassKey key) {
-        if (key == null || key.isUnclassified()) {
-            return UNCLASSIFIED_SLICE_COLOR;
-        }
-        PathClass pc = key.pathClass();
-        if (pc == null) {
-            return UNCLASSIFIED_SLICE_COLOR;
-        }
-        Integer argb = pc.getColor();
+        PathClass pc = (key == null) ? null : key.pathClass();
+        Integer argb = (pc == null) ? null : pc.getColor();
         if (argb == null) {
+            return defaultObjectsCssColor();
+        }
+        int r = ColorTools.red(argb);
+        int g = ColorTools.green(argb);
+        int b = ColorTools.blue(argb);
+        return "rgb(" + r + "," + g + "," + b + ")";
+    }
+
+    /**
+     * Reads {@link PathPrefs#colorDefaultObjectsProperty()} and returns it
+     * as a CSS {@code rgb(...)} string. This is the colour QuPath uses for
+     * unclassified annotations in the viewer.
+     */
+    private static String defaultObjectsCssColor() {
+        try {
+            int packed = PathPrefs.colorDefaultObjectsProperty().get();
+            return "rgb(" + ColorTools.red(packed) + ","
+                    + ColorTools.green(packed) + ","
+                    + ColorTools.blue(packed) + ")";
+        } catch (Exception e) {
+            // Defensive: pref read should never fail, but never let UI crash on it.
             return DEFAULT_SLICE_COLOR;
         }
-        int r = (argb >> 16) & 0xFF;
-        int g = (argb >> 8) & 0xFF;
-        int b = argb & 0xFF;
-        return "rgb(" + r + "," + g + "," + b + ")";
     }
 
     /**

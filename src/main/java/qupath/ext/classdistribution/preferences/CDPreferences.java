@@ -37,7 +37,7 @@ public final class CDPreferences {
     // earlier cyan / red pair which was problematic for protanopia /
     // deuteranopia. Both ColorPickers remain user-overridable.
     private static final int DEFAULT_POLYLINE_WIDTH_PX = 1;
-    private static final double DEFAULT_HIGHLIGHT_THRESHOLD_PCT = 30.0;
+    private static final double DEFAULT_HIGHLIGHT_THRESHOLD_PCT = 15.0;
     private static final boolean DEFAULT_SHOW_SLICE_LABELS = true;
     private static final String DEFAULT_LAST_IMAGE_TYPE_FILTER = "";
     private static final String DEFAULT_OVER_COLOR_HEX = "#0072B2";
@@ -78,8 +78,12 @@ public final class CDPreferences {
 
         polylineWidthPxProperty = PathPrefs.createPersistentPreference(
                 PREFIX + "polylineWidthPx", DEFAULT_POLYLINE_WIDTH_PX);
+        // Key changed from highlightThresholdPct in v0.1.2 because the
+        // algorithm semantics changed (absolute percentage points vs ratio
+        // of median-of-others). Old saved values would misbehave under the
+        // new algorithm; the rename forces a clean default.
         highlightThresholdPctProperty = PathPrefs.createPersistentPreference(
-                PREFIX + "highlightThresholdPct", DEFAULT_HIGHLIGHT_THRESHOLD_PCT);
+                PREFIX + "highlightThresholdPp", DEFAULT_HIGHLIGHT_THRESHOLD_PCT);
         showSliceLabelsProperty = PathPrefs.createPersistentPreference(
                 PREFIX + "showSliceLabels", DEFAULT_SHOW_SLICE_LABELS);
         lastImageTypeFilterProperty = PathPrefs.createPersistentPreference(

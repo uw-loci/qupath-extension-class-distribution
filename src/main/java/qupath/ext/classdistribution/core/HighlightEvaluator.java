@@ -15,25 +15,30 @@ import java.util.Map;
  * <p>For each class, the evaluator computes:
  * <ol>
  *   <li>The class's share of the total (e.g. 0.42 for 42%).</li>
- *   <li>The median of the OTHER classes' shares (i.e. excluding this class).</li>
- *   <li>An {@link Highlight} verdict:
+ *   <li>The median share across ALL classes.</li>
+ *   <li>An {@link Highlight} verdict using an absolute
+ *       percentage-point threshold:
  *     <ul>
- *       <li>{@link Highlight#OVER} if {@code share >= median * (1 + thresholdPct/100)}</li>
- *       <li>{@link Highlight#UNDER} if {@code share <= median * (1 - thresholdPct/100)}</li>
+ *       <li>{@link Highlight#OVER} if {@code share - median >= thresholdPct/100}</li>
+ *       <li>{@link Highlight#UNDER} if {@code median - share >= thresholdPct/100}</li>
  *       <li>{@link Highlight#NORMAL} otherwise.</li>
  *     </ul>
  *   </li>
  * </ol>
  *
+ * <p>Earlier versions compared against the median of OTHER classes with a
+ * ratio-of-median threshold; in skewed distributions that flagged almost
+ * every class. The current implementation uses the global median plus an
+ * absolute percentage-point threshold, which reads as "flag a class when
+ * its share is more than X percentage points above or below the typical
+ * class share."
+ *
  * <p>Edge cases:
  * <ul>
- *   <li>Single-class data: every slice is NORMAL (no median of "others").</li>
+ *   <li>Single-class data: every slice is NORMAL (nothing to compare to).</li>
  *   <li>Total contribution is zero: every slice is NORMAL (cannot compute shares).</li>
- *   <li>Median of others is zero (i.e. every other class is empty): if the
- *       single non-empty class has any positive share it is OVER; UNDER cannot
- *       fire because there is no positive median to be under.</li>
- *   <li>Threshold of zero: any deviation flags as OVER or UNDER (almost
- *       certainly noisy; documented at the slider tooltip).</li>
+ *   <li>Threshold of zero: any deviation from the median flags as OVER or
+ *       UNDER (noisy; documented at the slider tooltip).</li>
  * </ul>
  *
  * @author Mike Nelson
@@ -54,17 +59,17 @@ public final class HighlightEvaluator {
     }
 
     /**
-     * Computed per-class slice metadata: share (0..1), median-of-others
-     * (0..1), and the Highlight verdict.
+     * Computed per-class slice metadata: share (0..1), the global median
+     * across all classes (0..1), and the Highlight verdict.
      */
     public static final class SliceEval {
         private final double share;
-        private final double medianOfOthers;
+        private final double median;
         private final Highlight highlight;
 
-        public SliceEval(double share, double medianOfOthers, Highlight highlight) {
+        public SliceEval(double share, double median, Highlight highlight) {
             this.share = share;
-            this.medianOfOthers = medianOfOthers;
+            this.median = median;
             this.highlight = highlight;
         }
 
@@ -72,8 +77,11 @@ public final class HighlightEvaluator {
             return share;
         }
 
-        public double medianOfOthers() {
-            return medianOfOthers;
+        /**
+         * The global median share across all classes in the evaluation.
+         */
+        public double median() {
+            return median;
         }
 
         public Highlight highlight() {
@@ -104,11 +112,14 @@ public final class HighlightEvaluator {
     }
 
     /**
-     * Evaluates each class against the median of the other classes.
+     * Evaluates each class against the global median of all class shares,
+     * flagging slices whose share is more than {@code thresholdPct}
+     * percentage points above or below the median.
      *
      * @param contributions per-class contribution totals (typically from
      *                      {@link ContributionCalculator#sum(Map, Map)}); never null.
-     * @param thresholdPct deviation percent that flips a slice from NORMAL to
+     * @param thresholdPct absolute percentage-point deviation from the
+     *                     median required to flip a slice from NORMAL to
      *                     OVER / UNDER. Negative values are treated as zero.
      * @return per-class evaluation; never null.
      */
@@ -117,7 +128,7 @@ public final class HighlightEvaluator {
         if (contributions == null) {
             contributions = Collections.emptyMap();
         }
-        double thresh = Math.max(0.0, thresholdPct);
+        double thresholdShare = Math.max(0.0, thresholdPct) / 100.0;
         double total = 0.0;
         for (ClassSummary s : contributions.values()) {
             if (s != null) {
@@ -134,57 +145,44 @@ public final class HighlightEvaluator {
             return new Evaluation(out, total);
         }
 
-        // Pre-compute shares so we don't redo the divide for every slice.
+        // Pre-compute shares (fraction of total, in [0, 1]).
         Map<ClassKey, Double> shares = new LinkedHashMap<>();
+        java.util.List<Double> allShares = new java.util.ArrayList<>(contributions.size());
         for (Map.Entry<ClassKey, ClassSummary> e : contributions.entrySet()) {
             double v = e.getValue() == null ? 0.0 : e.getValue().total();
-            shares.put(e.getKey(), v / total);
+            double share = v / total;
+            shares.put(e.getKey(), share);
+            allShares.add(share);
         }
 
-        // For each class, take the median of the OTHER classes' shares.
+        double globalMedian = median(allShares);
+        boolean canCompare = shares.size() >= 2;
+
         for (Map.Entry<ClassKey, Double> e : shares.entrySet()) {
             double share = e.getValue();
-            double median = medianExcluding(shares, e.getKey());
+            double diff = share - globalMedian;
             Highlight h;
-            if (shares.size() < 2) {
-                // Single class: nothing to compare against.
+            if (!canCompare) {
                 h = Highlight.NORMAL;
-            } else if (median <= 0.0) {
-                // No positive comparison group; treat any positive share as OVER.
-                h = share > 0.0 ? Highlight.OVER : Highlight.NORMAL;
-            } else {
-                double upper = median * (1.0 + thresh / 100.0);
-                double lower = median * (1.0 - thresh / 100.0);
-                if (share >= upper && upper > median) {
-                    // Strict-above only when threshold > 0 (upper > median).
+            } else if (thresholdShare == 0.0) {
+                // Edge case: threshold zero flags any deviation from the median.
+                if (diff > 1e-9) {
                     h = Highlight.OVER;
-                } else if (share <= lower && lower < median) {
+                } else if (diff < -1e-9) {
                     h = Highlight.UNDER;
-                } else if (thresh == 0.0 && share != median) {
-                    // Threshold of zero: any deviation flags.
-                    h = share > median ? Highlight.OVER : Highlight.UNDER;
                 } else {
                     h = Highlight.NORMAL;
                 }
+            } else if (diff >= thresholdShare) {
+                h = Highlight.OVER;
+            } else if (diff <= -thresholdShare) {
+                h = Highlight.UNDER;
+            } else {
+                h = Highlight.NORMAL;
             }
-            out.put(e.getKey(), new SliceEval(share, median, h));
+            out.put(e.getKey(), new SliceEval(share, globalMedian, h));
         }
         return new Evaluation(out, total);
-    }
-
-    /**
-     * Median of the values in {@code shares} excluding the entry keyed by
-     * {@code excluded}. Returns zero if no values remain.
-     */
-    private static double medianExcluding(Map<ClassKey, Double> shares, ClassKey excluded) {
-        // Copy values into a list, drop the excluded key.
-        java.util.List<Double> values = new java.util.ArrayList<>(shares.size());
-        for (Map.Entry<ClassKey, Double> e : shares.entrySet()) {
-            if (!e.getKey().equals(excluded)) {
-                values.add(e.getValue());
-            }
-        }
-        return median(values);
     }
 
     /**
