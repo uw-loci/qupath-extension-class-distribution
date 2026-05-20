@@ -23,23 +23,43 @@ it into your QuPath extensions folder for a manual install.
 
 ## Architecture overview
 
-Eight classes, three packages:
+Fourteen classes, four packages:
 
 ```
 qupath.ext.classdistribution
-  ClassDistributionExtension       -- entry point + menu wiring
+  ClassDistributionExtension       -- entry point + two menu items
   ui/
-    ClassDistributionDialog        -- Stage + listener lifecycle + dirty banner host
+    ClassDistributionDialog        -- annotation dialog: Stage, tabs, listener
+                                      lifecycle, dirty banner host
+    DetectionTrainingDialog        -- detection-training dialog; mirrors the
+                                      annotation dialog's layout
     ChartPane                      -- PieChart + custom legend + per-slice CSS
-    AdvancedSection                -- collapsible TitledPane: width / threshold / colours / labels
+                                      + highlight aura
+    MiniChartPane                  -- label-free PieChart for the All images grid
+    ProjectGridPane                -- scrollable grid of MiniChartPanes +
+                                      shared legend + thumbnail-size slider
+    AdvancedSection                -- collapsible TitledPane of Advanced controls
     DirtyBanner                    -- amber HBox + Save-image button
   core/
-    ProjectAnnotationCache         -- per-image cache + project poll
-    ContributionCalculator         -- area + length*width math; null-class -> Unclassified bucket
-    HighlightEvaluator             -- median + threshold logic; OVER / UNDER / NORMAL
+    ContributionCalculator         -- area + length*width math; null-class
+                                      -> Unclassified bucket
+    HighlightEvaluator             -- global-median ratio logic;
+                                      OVER / UNDER / NORMAL / MISSING
+    ProjectAnnotationCache         -- per-image annotation cache + project poll
+    DetectionLabelCalculator       -- labeled-detection counting; multi-part split
+    DetectionTrainingCache         -- per-image detection-training cache + poll
   preferences/
     CDPreferences                  -- single-namespace PathPrefs
 ```
+
+Both dialogs share `ChartPane`, `MiniChartPane`, `ProjectGridPane`,
+`AdvancedSection`, `DirtyBanner`, `HighlightEvaluator`, and
+`CDPreferences`. The annotation dialog uses `ContributionCalculator` +
+`ProjectAnnotationCache`; the detection dialog uses
+`DetectionLabelCalculator` + `DetectionTrainingCache`. Each dialog hosts
+three tabs (Project / Current image / All images); the Advanced
+"side-by-side" checkbox replaces the first two tabs with a `SplitPane`
+and hides the All images tab.
 
 ### Live update flow
 
@@ -66,10 +86,70 @@ qupath.ext.classdistribution
 
 ### Highlight evaluation
 
-Per slice: share = total / sum-of-totals; median = median of OTHER slices'
-shares; OVER if `share >= median * (1 + threshold/100)`, UNDER if
-`share <= median * (1 - threshold/100)`, NORMAL otherwise. Single-class
-data and zero-total cases short-circuit to NORMAL.
+`HighlightEvaluator.evaluate(contributions, ratio)` flags each class
+against a multiplicative ratio relative to the GLOBAL median of all
+class shares (not the median of the *other* classes -- earlier versions
+did that, and it over-flagged in skewed data).
+
+Per slice: `share = total / sum-of-non-missing-totals`. The global
+median is the median of every present class's share. With `k =
+max(1.0, ratio)`:
+
+- `OVER` if `share / median >= k`
+- `UNDER` if `share / median <= 1 / k`
+- `NORMAL` otherwise
+
+The default ratio is `2.0`; the Advanced slider runs 1.5 to 10.0. The
+ratio is symmetric in log space, which fixes the asymmetry of the old
+percentage-point approach (a small-share class could never be N points
+below a small median, so it could never be flagged under-represented).
+
+Edge cases, exactly as implemented:
+
+- Fewer than two present classes: every slice is `NORMAL` (nothing to
+  compare against).
+- Total contribution zero, or an empty input map: every slice is
+  `NORMAL` (cannot compute shares), except missing entries (below).
+- Degenerate median (`globalMedian <= 0.0`, i.e. more than half the
+  present classes have zero share): any class with a positive share is
+  `OVER`; nothing can be `UNDER`.
+- A class passed in with zero contribution AND zero annotation count is
+  treated as `MISSING`. Missing entries are excluded from the total and
+  from the median computation (so injecting them does not skew the
+  comparison group) but round-trip into the output map with
+  `Highlight.MISSING`. The Current image view injects these to surface
+  project classes the open image has none of.
+
+### Detection-label evaluation
+
+`DetectionLabelCalculator.aggregate(hierarchy)` counts how many
+detections each class would label given the current training
+annotations, mirroring QuPath's Object Classifier pipeline:
+
+- An **area** annotation with a `PathClass` labels every detection
+  inside its ROI, via `hierarchy.getAllDetectionsForROI(roi)`.
+- A **point** annotation (Counting tool) with a `PathClass` labels the
+  detection at each point, via
+  `PathObjectTools.getObjectsForLocation(...)`.
+- **Line / polyline** annotations are skipped -- they do not label
+  detections.
+
+A detection labeled by annotations of two different classes is counted
+under BOTH classes; the sum of per-class counts can therefore exceed
+`distinctLabeledDetections()`, which is itself a useful signal. The
+result also reports `trainingAnnotationCount()` -- the number of
+annotations that contributed at least one label. `ClassSummary.total()`
+is set equal to `count()` so the pie slice scales with the
+labeled-detection count.
+
+`DetectionLabelCalculator.applySplit(raw, splitMultiPart)` optionally
+re-keys the result so a composite class such as `CD4: CD8` contributes
+its count to both `CD4` and `CD8`. It uses QuPath's
+`PathClassTools.splitNames(PathClass)` for the split and
+`PathClass.fromString(String)` to look up the canonical single-name
+`PathClass` (so user-set colours on `CD4` / `CD8` are picked up). When
+`splitMultiPart` is false the input is returned unchanged. This mirrors
+the "Distance to annotations 2D" command's handling of the same flag.
 
 ### Reference choices
 
@@ -92,13 +172,17 @@ data and zero-total cases short-circuit to NORMAL.
   pattern is identical: attach in `configureStage()` after `stage.show()`,
   detach in `stage.setOnHidden(...)`, filter `event.isChanging()`.
 - **Preferences** use the single-namespace `PathPrefs` shape from
-  `qupath-extension-confusion-matrix/.../CMPreferences.java`. Eleven keys
-  total, all under the `classdistribution.` prefix.
+  `qupath-extension-confusion-matrix/.../CMPreferences.java`. All keys
+  live under the `classdistribution.` prefix: the Advanced controls
+  (polyline width, highlight ratio, both highlight colours, slice-labels,
+  advanced-expanded, side-by-side, split-multi-part, grid thumbnail
+  size), the last image-type filter, and the dialog's last X / Y / width
+  / height.
 
 ## Scripting API
 
-None in v0.1.0. The dialog opens via the menu item only. If you need to
-open the chart or trigger a re-poll from a Groovy script, file an issue
+None yet. Both dialogs open via their menu items only. If you need to
+open a chart or trigger a re-poll from a Groovy script, file an issue
 describing the use case so we can pick a sensible API surface.
 
 ## Contributing
