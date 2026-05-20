@@ -109,6 +109,7 @@ public final class DetectionTrainingDialog {
     private final BorderPane centreWrap = new BorderPane();
     private VBox projectTabContent;
     private VBox currentImageTabContent;
+    private final ProjectGridPane gridPane;
     private final AdvancedSection advanced;
     private final Label statusSummary = new Label("");
     private final Label statusLastPolled = new Label(resources.getString("status.lastPolledNever"));
@@ -127,6 +128,7 @@ public final class DetectionTrainingDialog {
         this.dirtyBanner = new DirtyBanner(qupath, resources);
         this.chartPane = new ChartPane(resources);
         this.currentImageChartPane = new ChartPane(resources);
+        this.gridPane = new ProjectGridPane(qupath, resources);
         // Hide polyline-width control (not a labeling mechanism for
         // detections), show split-multi-part checkbox (relevant to
         // detection labeling, matching QuPath's Distance-to-annotations 2D).
@@ -383,9 +385,11 @@ public final class DetectionTrainingDialog {
         } else {
             Tab projectTab = new Tab(resources.getString("tab.project"), projectTabContent);
             Tab currentImageTab = new Tab(resources.getString("tab.currentImage"), currentImageTabContent);
+            Tab allImagesTab = new Tab(resources.getString("tab.allImages"), gridPane);
             projectTab.setClosable(false);
             currentImageTab.setClosable(false);
-            tabPane.getTabs().setAll(projectTab, currentImageTab);
+            allImagesTab.setClosable(false);
+            tabPane.getTabs().setAll(projectTab, currentImageTab, allImagesTab);
             centreWrap.setCenter(tabPane);
         }
         renderChart();
@@ -575,6 +579,22 @@ public final class DetectionTrainingDialog {
     private void renderChart() {
         renderProjectChart();
         renderCurrentImageChart();
+        renderGrid();
+    }
+
+    private void renderGrid() {
+        Project<BufferedImage> project = qupath.getProject();
+        var cacheRows = cache.entriesInProjectOrder(project);
+        boolean split = advanced.isSplitMultiPart();
+        java.util.List<ProjectGridPane.RowEntry> rows = new java.util.ArrayList<>();
+        for (var e : cacheRows) {
+            rows.add(ProjectGridPane.rowFor(e.getKey(), e.getValue().contributions()));
+        }
+        ImageData<BufferedImage> data = qupath.getImageData();
+        ProjectImageEntry<BufferedImage> currentlyOpen =
+                (project == null || data == null) ? null : project.getEntry(data);
+        gridPane.refresh(rows, currentlyOpen,
+                m -> DetectionLabelCalculator.applySplit(m, split));
     }
 
     private void renderProjectChart() {

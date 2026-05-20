@@ -132,6 +132,25 @@ public final class DetectionTrainingCache {
     }
 
     /**
+     * Returns the cached rows in project-list order, skipping any entry
+     * that has no cached row. Used by the per-image grid tab.
+     */
+    public List<Map.Entry<ProjectImageEntry<?>, ImageRow>> entriesInProjectOrder(
+            Project<?> project) {
+        List<Map.Entry<ProjectImageEntry<?>, ImageRow>> out = new java.util.ArrayList<>();
+        if (project == null) {
+            return out;
+        }
+        for (ProjectImageEntry<?> entry : project.getImageList()) {
+            ImageRow row = rows.get(entry);
+            if (row != null) {
+                out.add(Map.entry(entry, row));
+            }
+        }
+        return out;
+    }
+
+    /**
      * Computes the open image's per-class labeled-detection counts and
      * stores them under {@code entry}. No-op if {@code hierarchy} is null
      * or {@code entry} is null.

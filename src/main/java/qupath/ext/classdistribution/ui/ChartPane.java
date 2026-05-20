@@ -231,7 +231,7 @@ public final class ChartPane extends VBox {
         pieChart.setMouseTransparent(busy);
     }
 
-    private void applySliceStyle(PieChart.Data slice, String style) {
+    static void applySliceStyle(PieChart.Data slice, String style) {
         // Adapted from qupath-extension-dl-pixel-classifier
         // TrainingDialog.java:5479-5495. The slice node is null until
         // first layout; install both an immediate setStyle and a
@@ -329,7 +329,7 @@ public final class ChartPane extends VBox {
      * viewer). Highlight verdict is conveyed separately via
      * {@link #applySliceEffect}.
      */
-    private static String baseColorFor(ClassKey key) {
+    static String baseColorFor(ClassKey key) {
         PathClass pc = (key == null) ? null : key.pathClass();
         Integer argb = (pc == null) ? null : pc.getColor();
         if (argb == null) {
@@ -346,7 +346,7 @@ public final class ChartPane extends VBox {
      * as a CSS {@code rgb(...)} string. This is the colour QuPath uses for
      * unclassified annotations in the viewer.
      */
-    private static String defaultObjectsCssColor() {
+    static String defaultObjectsCssColor() {
         try {
             int packed = PathPrefs.colorDefaultObjectsProperty().get();
             return "rgb(" + ColorTools.red(packed) + ","

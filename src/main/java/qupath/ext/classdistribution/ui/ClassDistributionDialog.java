@@ -121,6 +121,7 @@ public final class ClassDistributionDialog {
     private final BorderPane centreWrap = new BorderPane();
     private VBox projectTabContent;
     private VBox currentImageTabContent;
+    private final ProjectGridPane gridPane;
     private final AdvancedSection advanced;
     private final Label statusSummary = new Label("");
     private final Label statusLastPolled = new Label(resources.getString("status.lastPolledNever"));
@@ -141,6 +142,7 @@ public final class ClassDistributionDialog {
         this.dirtyBanner = new DirtyBanner(qupath, resources);
         this.chartPane = new ChartPane(resources);
         this.currentImageChartPane = new ChartPane(resources);
+        this.gridPane = new ProjectGridPane(qupath, resources);
         this.advanced = new AdvancedSection(resources);
         configureStage();
     }
@@ -426,6 +428,9 @@ public final class ClassDistributionDialog {
      */
     private void applyDisplayMode(boolean sideBySide) {
         // Detach from whichever container currently holds the content.
+        // Clearing the tabs detaches the per-tab content; the SplitPane is
+        // cleared in parallel. gridPane has no separate home in side-by-side
+        // mode (only accessible in tabbed mode).
         tabPane.getTabs().clear();
         sideBySidePane.getItems().clear();
 
@@ -436,9 +441,11 @@ public final class ClassDistributionDialog {
         } else {
             Tab projectTab = new Tab(resources.getString("tab.project"), projectTabContent);
             Tab currentImageTab = new Tab(resources.getString("tab.currentImage"), currentImageTabContent);
+            Tab allImagesTab = new Tab(resources.getString("tab.allImages"), gridPane);
             projectTab.setClosable(false);
             currentImageTab.setClosable(false);
-            tabPane.getTabs().setAll(projectTab, currentImageTab);
+            allImagesTab.setClosable(false);
+            tabPane.getTabs().setAll(projectTab, currentImageTab, allImagesTab);
             centreWrap.setCenter(tabPane);
         }
         renderChart();
@@ -644,12 +651,27 @@ public final class ClassDistributionDialog {
     }
 
     /**
-     * Renders both tabs. Cheap; both renders are O(classes) once the cache
-     * has been polled and the open image's hierarchy has been aggregated.
+     * Renders all three tabs. Cheap; renders are O(classes) and
+     * O(images) respectively once the cache has been polled.
      */
     private void renderChart() {
         renderProjectChart();
         renderCurrentImageChart();
+        renderGrid();
+    }
+
+    private void renderGrid() {
+        Project<BufferedImage> project = qupath.getProject();
+        var cacheRows = cache.entriesInProjectOrder(project);
+        java.util.List<ProjectGridPane.RowEntry> rows = new java.util.ArrayList<>();
+        for (var e : cacheRows) {
+            rows.add(ProjectGridPane.rowFor(e.getKey(), e.getValue().contributions()));
+        }
+        ImageData<BufferedImage> data = qupath.getImageData();
+        ProjectImageEntry<BufferedImage> currentlyOpen =
+                (project == null || data == null) ? null : project.getEntry(data);
+        // Annotation dialog: no per-row post-processing.
+        gridPane.refresh(rows, currentlyOpen, java.util.function.UnaryOperator.identity());
     }
 
     private void renderProjectChart() {

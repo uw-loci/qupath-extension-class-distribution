@@ -175,6 +175,26 @@ public final class ProjectAnnotationCache {
     }
 
     /**
+     * Returns the cached rows in project-list order, skipping any entry
+     * that has no cached row. Used by the per-image grid tab so the
+     * thumbnail order matches QuPath's project tree.
+     */
+    public List<Map.Entry<ProjectImageEntry<?>, ImageRow>> entriesInProjectOrder(
+            Project<?> project) {
+        List<Map.Entry<ProjectImageEntry<?>, ImageRow>> out = new java.util.ArrayList<>();
+        if (project == null) {
+            return out;
+        }
+        for (ProjectImageEntry<?> entry : project.getImageList()) {
+            ImageRow row = rows.get(entry);
+            if (row != null) {
+                out.add(Map.entry(entry, row));
+            }
+        }
+        return out;
+    }
+
+    /**
      * Computes the open image's contribution from its live hierarchy and
      * stores the row under {@code entry}. Called on the FX thread by the
      * dialog whenever a {@code PathObjectHierarchyListener} fires.
