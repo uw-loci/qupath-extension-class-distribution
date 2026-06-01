@@ -44,6 +44,8 @@ The extension uses these QuPath terms with specific meanings:
   *detections* each class would label given your current training
   annotations -- a direct read on object-classifier training balance.
 
+![Class Distribution panel: a project-wide pie chart on the left and a single-image pie chart on the right, each with per-class percentages, an Image Type dropdown, a Refresh from project button, and legends carrying [over] and [under] markers](images/class-distribution-panel.png)
+
 Each dialog has three tabs:
 
 - **Project** -- the aggregate chart across every project image whose

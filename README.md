@@ -15,6 +15,8 @@
 > whether their project is annotation-balanced enough to feed a
 > classifier.
 
+![Class Distribution panel showing a project-wide pie chart and a single-image pie chart side by side, with per-class percentages, [over] and [under] markers in the legends, and an Image Type dropdown](docs/images/class-distribution-panel.png)
+
 ## Requirements
 
 - QuPath 0.6.0 or later.
