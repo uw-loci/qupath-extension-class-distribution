@@ -65,7 +65,7 @@ import java.util.ResourceBundle;
  *   <li>Listens to the open image's hierarchy and re-renders on
  *       annotation changes. Filters {@code event.isChanging()} per
  *       gated-classifier's pattern
- *       ({@code GatedClassifierDialog.java:494-553}).</li>
+ *       ({@code ClassifySubsetDialog.java}).</li>
  *   <li>Listens to {@code qupath.imageDataProperty()} and {@code
  *       qupath.projectProperty()}; on image switch, rebinds (does not
  *       close, contra gated-classifier).</li>

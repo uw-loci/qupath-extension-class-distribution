@@ -167,7 +167,7 @@ the "Distance to annotations 2D" command's handling of the same flag.
   dropdown filter needs, so a single `readImageData()` call gets us both
   pieces of state and is then cached.
 - **Listener lifecycle** is taken from
-  `qupath-extension-gated-object-classifier/.../GatedClassifierDialog.java`
+  `qupath-extension-classify-object-subset/.../ClassifySubsetDialog.java`
   lines 494-553. Gated CLOSES on image switch; we REBIND. Otherwise the
   pattern is identical: attach in `configureStage()` after `stage.show()`,
   detach in `stage.setOnHidden(...)`, filter `event.isChanging()`.
