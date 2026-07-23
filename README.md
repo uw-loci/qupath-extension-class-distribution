@@ -19,7 +19,7 @@
 
 ## Requirements
 
-- QuPath 0.6.0 or later.
+- QuPath 0.7.0 or later.
 - A QuPath project (single-image use is degraded but not blocked -- the chart
   still polls the open image and renders a single-image distribution).
 - JDK 21 (only required to build from source).
