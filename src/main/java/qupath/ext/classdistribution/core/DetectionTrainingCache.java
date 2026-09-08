@@ -151,17 +151,22 @@ public final class DetectionTrainingCache {
     }
 
     /**
-     * Computes the open image's per-class labeled-detection counts and
-     * stores them under {@code entry}. No-op if {@code hierarchy} is null
-     * or {@code entry} is null.
+     * Stores an already-computed aggregate for the open image under
+     * {@code entry}. No-op if {@code result} is null.
+     *
+     * <p>The caller supplies the {@link DetectionLabelCalculator.Result} rather
+     * than a hierarchy because {@link DetectionLabelCalculator#aggregate} walks
+     * every training annotation against every detection it contains. The open
+     * image needs that aggregate twice - once for this row, once for the
+     * current-image chart - and it must run off the FX thread, so it is
+     * computed once by the caller and passed to both.</p>
      */
     public ImageRow updateOpen(ProjectImageEntry<?> entry,
                                ImageData.ImageType imageType,
-                               PathObjectHierarchy hierarchy) {
-        if (hierarchy == null) {
+                               DetectionLabelCalculator.Result result) {
+        if (result == null) {
             return null;
         }
-        DetectionLabelCalculator.Result result = DetectionLabelCalculator.aggregate(hierarchy);
         ImageRow row = new ImageRow(
                 imageType,
                 entry == null ? "(open image)" : entry.getImageName(),

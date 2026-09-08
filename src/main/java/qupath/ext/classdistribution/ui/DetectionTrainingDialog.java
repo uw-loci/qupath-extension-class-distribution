@@ -1,5 +1,6 @@
 package qupath.ext.classdistribution.ui;
 
+import javafx.animation.PauseTransition;
 import javafx.application.Platform;
 import javafx.beans.property.BooleanProperty;
 import javafx.beans.property.SimpleBooleanProperty;
@@ -20,6 +21,7 @@ import javafx.scene.control.TabPane;
 import javafx.scene.control.Tooltip;
 import javafx.scene.input.KeyCode;
 import javafx.scene.input.KeyEvent;
+import javafx.util.Duration;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
@@ -116,6 +118,26 @@ public final class DetectionTrainingDialog {
 
     private PathObjectHierarchy boundHierarchy;
     private PathObjectHierarchyListener hierarchyListener;
+
+    // Live open-image updates. DetectionLabelCalculator.aggregate walks every
+    // training annotation against every detection inside it, so on a hierarchy
+    // with hundreds of thousands of detections it is far too slow to run inline
+    // on the FX thread - and the hierarchy listener that triggers it fires
+    // repeatedly during cell detection and classifier runs, which is exactly
+    // when the hierarchy is largest. Requests are coalesced by a debounce, the
+    // aggregate runs on a background thread, and a generation counter drops a
+    // superseded result instead of letting it overwrite a newer one.
+    private static final long LIVE_UPDATE_DEBOUNCE_MS = 250;
+    private final PauseTransition liveUpdateDebounce =
+            new PauseTransition(Duration.millis(LIVE_UPDATE_DEBOUNCE_MS));
+    private final java.util.concurrent.atomic.AtomicLong liveUpdateGeneration =
+            new java.util.concurrent.atomic.AtomicLong();
+    private java.util.concurrent.ExecutorService liveUpdateExecutor;
+    /**
+     * Last aggregate computed for the open image. Held so the cache row and the
+     * current-image chart share one pass instead of each running their own.
+     */
+    private DetectionLabelCalculator.Result openImageResult;
     private ChangeListener<ImageData<BufferedImage>> imageDataListener;
     private ChangeListener<Project<BufferedImage>> projectListener;
 
@@ -208,6 +230,12 @@ public final class DetectionTrainingDialog {
         stage.setHeight(height);
         applyPersistedPosition();
 
+        liveUpdateDebounce.setOnFinished(e -> runLiveUpdate());
+        liveUpdateExecutor = java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, "class-distribution-live-update");
+            t.setDaemon(true);
+            return t;
+        });
         stage.setOnHidden(e -> handleHidden());
     }
 
@@ -363,7 +391,7 @@ public final class DetectionTrainingDialog {
         // Polyline width is not exposed in this dialog, but the listener is
         // still wired (no-op for detection labels).
         advanced.onPolylineWidthChanged(v -> {
-            recomputeOpenImage();
+            scheduleLiveUpdate();
             renderChart();
         });
         advanced.onRatioChanged(r -> renderChart());
@@ -407,40 +435,45 @@ public final class DetectionTrainingDialog {
 
         if (imageData == null) {
             dirtyBanner.refresh(null);
-            recomputeOpenImage();
+            scheduleLiveUpdate();
             return;
         }
         PathObjectHierarchy hierarchy = imageData.getHierarchy();
         if (hierarchy == null) {
             dirtyBanner.refresh(imageData);
-            recomputeOpenImage();
+            scheduleLiveUpdate();
             return;
         }
         hierarchyListener = event -> {
             if (event != null && event.isChanging()) {
                 return;
             }
+            // Hierarchy events arrive on the CALLING thread, which during a
+            // classifier or detection run is a background thread - so hop to FX
+            // before touching the debounce, then straight back off it.
             Platform.runLater(() -> {
                 if (!stage.isShowing()) {
                     return;
                 }
-                try {
-                    recomputeOpenImage();
-                    renderChart();
-                    dirtyBanner.refresh(qupath.getImageData());
-                } catch (Exception e) {
-                    logger.warn("Live update failed: {}", e.toString());
-                    chartPane.showPlaceholder(resources.getString("empty.liveUpdateFailed"));
-                }
+                scheduleLiveUpdate();
             });
         };
         hierarchy.addListener(hierarchyListener);
         boundHierarchy = hierarchy;
         dirtyBanner.refresh(imageData);
-        recomputeOpenImage();
+        scheduleLiveUpdate();
     }
 
     private void handleHidden() {
+        liveUpdateDebounce.stop();
+        // Bump the generation so an in-flight aggregate discards its result
+        // instead of touching controls on a closed dialog.
+        liveUpdateGeneration.incrementAndGet();
+        if (liveUpdateExecutor != null) {
+            liveUpdateExecutor.shutdownNow();
+            liveUpdateExecutor = null;
+        }
+        openImageResult = null;
         if (boundHierarchy != null && hierarchyListener != null) {
             try {
                 boundHierarchy.removeListener(hierarchyListener);
@@ -518,7 +551,7 @@ public final class DetectionTrainingDialog {
         currentTask = task;
         task.setOnSucceeded(e -> {
             finishPoll(true);
-            recomputeOpenImage();
+            scheduleLiveUpdate();
             statusLastPolled.setText(String.format(
                     resources.getString("status.lastPolledFormat"),
                     LocalDateTime.now().format(TIME_FORMAT)));
@@ -528,7 +561,7 @@ public final class DetectionTrainingDialog {
         task.setOnCancelled(e -> {
             finishPoll(false);
             repollButton.setText(resources.getString("label.repollCancelled"));
-            recomputeOpenImage();
+            scheduleLiveUpdate();
             renderChart();
             javafx.animation.PauseTransition pause =
                     new javafx.animation.PauseTransition(javafx.util.Duration.seconds(2));
@@ -566,14 +599,59 @@ public final class DetectionTrainingDialog {
     // Rendering
     // ------------------------------------------------------------------
 
-    private void recomputeOpenImage() {
+    /**
+     * Ask for the open image's aggregate to be recomputed. Safe to call from any
+     * listener: requests inside the debounce window collapse into one background
+     * pass, so a burst of hierarchy events costs one aggregate, not one each.
+     */
+    private void scheduleLiveUpdate() {
+        // Invalidate here as well as at submit time, so a result already in
+        // flight cannot land after a newer request has been made.
+        liveUpdateGeneration.incrementAndGet();
+        liveUpdateDebounce.playFromStart();
+    }
+
+    private void runLiveUpdate() {
         ImageData<BufferedImage> data = qupath.getImageData();
-        if (data == null) {
+        PathObjectHierarchy hierarchy = data == null ? null : data.getHierarchy();
+        if (hierarchy == null) {
+            openImageResult = null;
+            renderChart();
             return;
         }
         Project<BufferedImage> project = qupath.getProject();
-        ProjectImageEntry<BufferedImage> entry = project == null ? null : project.getEntry(data);
-        cache.updateOpen(entry, data.getImageType(), data.getHierarchy());
+        final ProjectImageEntry<BufferedImage> entry =
+                project == null ? null : project.getEntry(data);
+        final ImageData.ImageType imageType = data.getImageType();
+        final long generation = liveUpdateGeneration.incrementAndGet();
+
+        java.util.concurrent.ExecutorService executor = liveUpdateExecutor;
+        if (executor == null || executor.isShutdown()) {
+            return;
+        }
+        executor.submit(() -> {
+            DetectionLabelCalculator.Result result;
+            try {
+                result = DetectionLabelCalculator.aggregate(hierarchy);
+            } catch (Exception e) {
+                logger.warn("Live update failed: {}", e.toString());
+                result = null;
+            }
+            final DetectionLabelCalculator.Result finalResult = result;
+            Platform.runLater(() -> {
+                if (generation != liveUpdateGeneration.get() || !stage.isShowing()) {
+                    return;
+                }
+                openImageResult = finalResult;
+                if (finalResult == null) {
+                    chartPane.showPlaceholder(resources.getString("empty.liveUpdateFailed"));
+                    return;
+                }
+                cache.updateOpen(entry, imageType, finalResult);
+                renderChart();
+                dirtyBanner.refresh(qupath.getImageData());
+            });
+        });
     }
 
     private void renderChart() {
@@ -658,7 +736,16 @@ public final class DetectionTrainingDialog {
             currentImageChartPane.showPlaceholder(resources.getString("empty.noDetectionLabelsCurrent"));
             return;
         }
-        DetectionLabelCalculator.Result result = DetectionLabelCalculator.aggregate(hierarchy);
+        // Reuse the aggregate computed by runLiveUpdate() rather than running a
+        // second full pass here - this method is also reached from the ratio,
+        // colour and label listeners, each of which would otherwise re-walk the
+        // whole hierarchy on the FX thread for a display-only change.
+        DetectionLabelCalculator.Result result = openImageResult;
+        if (result == null) {
+            currentImageStatus.setText("");
+            currentImageChartPane.showPlaceholder(resources.getString("empty.noDetectionLabelsCurrent"));
+            return;
+        }
         currentImageStatus.setText(String.format(
                 resources.getString("status.currentImageDetectionsFormat"),
                 result.distinctLabeledDetections(),
