@@ -93,6 +93,10 @@ public final class ChartPane extends VBox {
 
         pieChart = new PieChart();
         pieChart.setLegendVisible(false);  // we render our own legend below.
+        // Never animate: a refresh that lands while the previous fade-out is
+        // still running collapses every slice label onto one point (the
+        // repoll path refreshes twice in quick succession).
+        pieChart.setAnimated(false);
         pieChart.setLabelsVisible(true);
         pieChart.setLabelLineLength(10);
         pieChart.setMinSize(180, 180);
