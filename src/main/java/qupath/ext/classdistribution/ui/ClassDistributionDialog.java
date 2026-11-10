@@ -51,6 +51,7 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.ResourceBundle;
 
@@ -902,7 +903,7 @@ public final class ClassDistributionDialog {
             }
             sb.append(token.charAt(0));
             if (token.length() > 1) {
-                sb.append(token.substring(1).toLowerCase());
+                sb.append(token.substring(1).toLowerCase(Locale.ROOT));
             }
         }
         return sb.toString();

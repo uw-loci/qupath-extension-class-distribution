@@ -5,6 +5,13 @@ All notable changes to this extension are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- Image type names shown in the dialogs ("Brightfield ...", "Fluorescence")
+  no longer come out with a dotless i when QuPath's language is set to Turkish or
+  Azerbaijani: every case conversion now uses `Locale.ROOT`.
+
 ## [0.1.8] - 2026-05-19
 
 ### Added
