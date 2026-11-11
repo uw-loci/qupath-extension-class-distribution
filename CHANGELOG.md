@@ -7,6 +7,8 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.1.9] - 2026-11-11
+
 ### Fixed
 - Image type names shown in the dialogs ("Brightfield ...", "Fluorescence")
   no longer come out with a dotless i when QuPath's language is set to Turkish or
